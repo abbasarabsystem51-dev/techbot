@@ -103,9 +103,9 @@ schedule:
 gemini:
   model: "gemini-3.8-flash"
   max_requests_per_day: 1
-  batch_size: 12
-  temperature: 0.7
-  max_output_tokens: 8192
+  batch_size: 6
+  temperature: 0.4
+  max_output_tokens: 32768
   response_mime_type: "application/json"
 
 # ── Post format ───────────────────────────────────────────────

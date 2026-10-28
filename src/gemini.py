@@ -7,6 +7,55 @@ src/gemini.py — کلاینت Gemini API
 from __future__ import annotations
 
 import json
+
+def _safe_json_loads(raw_text: str) -> dict:
+    """Fault-tolerant JSON parser with automatic partial-batch recovery."""
+    import json
+    import re
+    cleaned = raw_text.strip()
+    cleaned = re.sub(r"^`(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*`$", "", cleaned)
+    cleaned = cleaned.strip()
+
+    # Attempt 1: Standard & non-strict parse (allows control chars inside strings)
+    try:
+        return _safe_json_loads(cleaned, strict=False)
+    except Exception:
+        pass
+
+    # Attempt 2: Stream-extract all completed post objects if response was truncated
+    decoder = json.JSONDecoder(strict=False)
+    posts = []
+    arr_match = re.search(r'"posts"\s*:\s*\[', cleaned)
+    idx = arr_match.end() if arr_match else 0
+
+    while idx < len(cleaned):
+        brace_idx = cleaned.find("{", idx)
+        if brace_idx == -1:
+            break
+        try:
+            obj, end_idx = decoder.raw_decode(cleaned, brace_idx)
+            if isinstance(obj, dict) and ("article_id" in obj or "text" in obj):
+                posts.append(obj)
+            idx = end_idx
+        except Exception:
+            idx = brace_idx + 1
+
+    if posts:
+        return {"posts": posts}
+
+    # Attempt 3: Auto-close single truncated post
+    for suffix in ['"}]}', '"}]', '"}']:
+        try:
+            repaired = cleaned + suffix
+            data = _safe_json_loads(repaired, strict=False)
+            if isinstance(data, dict) and data.get("posts"):
+                return data
+        except Exception:
+            continue
+
+    return _safe_json_loads(cleaned)
+
 from pathlib import Path
 from typing import Any
 
@@ -184,7 +233,7 @@ def call_gemini_batch(
 
         # Parse JSON
         try:
-            data = json.loads(raw_text)
+            data = _safe_json_loads(raw_text)
         except json.JSONDecodeError as exc:
             logger.error("Failed to parse Gemini JSON response: %s\nRaw: %s", exc, raw_text[:500])
             raise GeminiAPIError(f"Gemini returned invalid JSON: {exc}") from exc
