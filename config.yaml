@@ -2,13 +2,11 @@
 # TechBot — Main Configuration
 # =============================================================
 
-# ── Bot identity ──────────────────────────────────────────────
 bot:
   name: "تک‌نیوز"
   handle: "@tech_news_110"
   timezone: "Asia/Tehran"
 
-# ── RSS Sources ───────────────────────────────────────────────
 sources:
   - name: "TechCrunch AI"
     url: "https://techcrunch.com/category/artificial-intelligence/feed/"
@@ -46,14 +44,12 @@ sources:
     weight: 1.4
     enabled: true
 
-# ── Fetching ──────────────────────────────────────────────────
 fetching:
   timeout_seconds: 10
   max_items_per_source: 20
   freshness_hours: 48
   user_agent: "TechBot/1.0 (+https://t.me/tech_news_110)"
 
-# ── Scoring ───────────────────────────────────────────────────
 scoring:
   ai_keywords:
     - "artificial intelligence"
@@ -78,7 +74,6 @@ scoring:
   freshness_weight: 0.05
   min_score: 0.3
 
-# ── Daily Schedule ────────────────────────────────────────────
 schedule:
   slots:
     - time: "09:00"
@@ -99,16 +94,14 @@ schedule:
   lesson_slot: "09:00"
   lesson_day: "monday"
 
-# ── Gemini API ────────────────────────────────────────────────
 gemini:
   model: "gemini-3.8-flash"
-  max_requests_per_day: 1
-  batch_size: 6
+  max_requests_per_day: 10
+  batch_size: 5
   temperature: 0.4
   max_output_tokens: 32768
   response_mime_type: "application/json"
 
-# ── Post format ───────────────────────────────────────────────
 post:
   max_chars: 1024
   footer: "\n\n📡 @tech_news_110"
@@ -121,29 +114,26 @@ post:
     source_label: "📰 منبع"
     read_more_label: "🔗 بیشتر بخوان"
 
-# ── Destinations ─────────────────────────────────────────────
 destinations:
   telegram:
     enabled: true
     parse_mode: "HTML"
     max_retries: 3
     retry_delay_seconds: 5
-    inter_post_delay_seconds: 2
+    inter_post_delay_seconds: 3
 
   eitaa:
     enabled: true
     base_url: "https://eitaacloud.ir/bot"
     max_retries: 3
     retry_delay_seconds: 5
-    inter_post_delay_seconds: 2
+    inter_post_delay_seconds: 3
 
-# ── Database ──────────────────────────────────────────────────
 database:
   path: "data/techbot.sqlite"
   wal_mode: true
   busy_timeout_ms: 5000
 
-# ── Logging ───────────────────────────────────────────────────
 logging:
   level: "INFO"
   file: "logs/techbot.log"
@@ -151,7 +141,6 @@ logging:
   backup_count: 5
   console: true
 
-# ── Curriculum ────────────────────────────────────────────────
 curriculum:
   path: "curriculum.json"
   loop: true

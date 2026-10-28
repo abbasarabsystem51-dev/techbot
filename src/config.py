@@ -157,7 +157,7 @@ class AppConfig:
 
     @property
     def gemini_model(self) -> str:
-        return self.yaml.get("gemini", {}).get("model", "gemini-1.5-flash")
+        return self.yaml.get("gemini", {}).get("model", "gemini-3.8-flash")
 
     @property
     def gemini_max_requests_per_day(self) -> int:

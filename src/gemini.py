@@ -1,31 +1,49 @@
 """
-src/gemini.py — کلاینت Gemini API
-
-الزام حیاتی: هر فراخوانی API باید درون gemini_quota_context() از state.py باشد.
-این ماژول فقط یک درخواست دسته‌ای روزانه ارسال می‌کند.
+src/gemini.py — کلاینت مقاوم و بهینه Gemini API
 """
 from __future__ import annotations
 
 import json
+import re
+import time
+from pathlib import Path
+from typing import Any
 
-def _safe_json_loads(raw_text: str) -> dict:
+import google.generativeai as genai
+
+from src.config import AppConfig
+from src.logging_config import get_logger
+from src.models import Article, GeminiNewsResponse
+from src.state import StateManager
+from src.utils import project_root
+
+logger = get_logger(__name__)
+
+
+class GeminiAPIError(RuntimeError):
+    """خطای غیرمنتظره در فراخوانی Gemini API."""
+
+
+def _safe_json_loads(raw_text: str) -> dict[str, Any]:
     """Fault-tolerant JSON parser with automatic partial-batch recovery."""
-    import json
-    import re
     cleaned = raw_text.strip()
-    cleaned = re.sub(r"^`(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*`$", "", cleaned)
+    cleaned = re.sub(r"^`{1,3}(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*`{1,3}$", "", cleaned)
     cleaned = cleaned.strip()
 
-    # Attempt 1: Standard & non-strict parse (allows control chars inside strings)
+    # Attempt 1: Standard non-strict parse
     try:
-        return _safe_json_loads(cleaned, strict=False)
+        data = json.loads(cleaned, strict=False)
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, list):
+            return {"posts": data}
     except Exception:
         pass
 
-    # Attempt 2: Stream-extract all completed post objects if response was truncated
+    # Attempt 2: Stream-extract all completed post objects if truncated
     decoder = json.JSONDecoder(strict=False)
-    posts = []
+    posts: list[dict[str, Any]] = []
     arr_match = re.search(r'"posts"\s*:\s*\[', cleaned)
     idx = arr_match.end() if arr_match else 0
 
@@ -42,48 +60,76 @@ def _safe_json_loads(raw_text: str) -> dict:
             idx = brace_idx + 1
 
     if posts:
+        logger.warning("Recovered %d complete posts from truncated Gemini JSON.", len(posts))
         return {"posts": posts}
 
     # Attempt 3: Auto-close single truncated post
     for suffix in ['"}]}', '"}]', '"}']:
         try:
             repaired = cleaned + suffix
-            data = _safe_json_loads(repaired, strict=False)
+            data = json.loads(repaired, strict=False)
             if isinstance(data, dict) and data.get("posts"):
                 return data
         except Exception:
             continue
 
-    return _safe_json_loads(cleaned)
-
-from pathlib import Path
-from typing import Any
-
-import google.generativeai as genai
-
-from src.config import AppConfig
-from src.logging_config import get_logger
-from src.models import Article, GeminiNewsResponse
-from src.state import StateManager
-from src.utils import project_root
-
-logger = get_logger(__name__)
+    return json.loads(cleaned, strict=False)
 
 
-# ---------------------------------------------------------------------------
-# Custom exceptions
-# ---------------------------------------------------------------------------
+def _sanitize_gemini_payload(
+    data: dict[str, Any], articles_batch: list[Article]
+) -> dict[str, Any]:
+    """Sanitize fields so a minor length overflow never aborts the whole batch."""
+    raw_posts = data.get("posts", [])
+    if not isinstance(raw_posts, list):
+        return {"posts": []}
 
-class GeminiAPIError(RuntimeError):
-    """خطای غیرمنتظره در فراخوانی Gemini API."""
+    article_map = {a.id: a for a in articles_batch}
+    fallback_article = articles_batch[0] if articles_batch else None
+    clean_posts: list[dict[str, Any]] = []
 
+    for item in raw_posts:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        if len(text) > 800:
+            text = text[:797].rsplit(" ", 1)[0] + "..."
 
-# ---------------------------------------------------------------------------
-# Prompt helpers
-# ---------------------------------------------------------------------------
+        art_id = str(item.get("article_id") or "").strip()
+        matched_art = article_map.get(art_id, fallback_article)
+        if not art_id and matched_art:
+            art_id = matched_art.id
+
+        cat = str(item.get("category") or "").lower().strip()
+        if cat not in ("ai", "tech"):
+            cat = matched_art.category.value if matched_art else "ai"
+
+        src_url = str(item.get("source_url") or "").strip()
+        if not src_url.startswith("http") and matched_art:
+            src_url = matched_art.canonical_url
+
+        src_title = str(item.get("source_title") or "").strip()
+        if not src_title and matched_art:
+            src_title = matched_art.title[:80]
+        if len(src_title) > 80:
+            src_title = src_title[:77] + "..."
+
+        clean_posts.append(
+            {
+                "article_id": art_id,
+                "text": text,
+                "category": cat,
+                "source_url": src_url,
+                "source_title": src_title,
+            }
+        )
+
+    return {"posts": clean_posts}
+
 
 def _read_prompt(name: str) -> str:
-    """Read a prompt file from the prompts/ directory."""
     path: Path = project_root() / "prompts" / name
     if not path.exists():
         logger.warning("Prompt file not found: %s", path)
@@ -92,7 +138,6 @@ def _read_prompt(name: str) -> str:
 
 
 def _articles_to_json(articles: list[Article]) -> str:
-    """Serialize articles to a compact JSON array for the prompt."""
     items: list[dict[str, Any]] = []
     for a in articles:
         items.append(
@@ -100,7 +145,7 @@ def _articles_to_json(articles: list[Article]) -> str:
                 "id": a.id,
                 "title": a.title,
                 "url": a.canonical_url,
-                "summary": a.summary[:500],
+                "summary": a.summary[:450],
                 "source_name": a.source_name,
                 "category": a.category.value,
                 "score": round(a.score, 4),
@@ -110,20 +155,14 @@ def _articles_to_json(articles: list[Article]) -> str:
 
 
 def _build_batch_prompt(articles: list[Article], system_prompt: str, news_prompt: str) -> str:
-    """
-    Construct the full batch prompt for Gemini.
-
-    Instructs the model to select, summarize, and output valid JSON conforming
-    to GeminiNewsResponse schema.
-    """
     schema_description = """{
   "posts": [
     {
       "article_id": "<same id as in the input articles array>",
-      "text": "<Farsi post text, max 800 characters, HTML tags allowed: <b>, <i>, <code>, <a href='...'>. NO footer, NO hashtags, NO @channel handle.>",
+      "text": "<Farsi post text, max 700 characters, HTML tags allowed: <b>, <i>, <code>, <a href='...'>. NO footer, NO hashtags, NO @channel handle.>",
       "category": "<'ai' or 'tech'>",
       "source_url": "<original article URL>",
-      "source_title": "<short descriptive title in Farsi, max 80 chars>"
+      "source_title": "<short descriptive title in Farsi, max 70 chars>"
     }
   ]
 }"""
@@ -138,54 +177,30 @@ def _build_batch_prompt(articles: list[Article], system_prompt: str, news_prompt
         "",
         "---",
         "## دستورالعمل خروجی",
-        "",
         "ورودی: آرایه‌ای از مقالات RSS به زبان انگلیسی.",
-        "خروجی: یک JSON object معتبر با schema زیر (و فقط همین JSON، بدون هیچ متن اضافه):",
-        "",
+        "خروجی: فقط یک JSON معتبر طبق ساختار زیر و بدون هیچ توضیح اضافی:",
         schema_description,
         "",
-        "قوانین مهم:",
-        "- برای هر مقاله‌ای که انتخاب می‌کنی یک post بنویس.",
-        "- متن post باید به فارسی روان باشد.",
-        "- از تگ‌های HTML مجاز تلگرام استفاده کن: <b>, <i>, <code>, <a href='...'>",
-        "- هیچ عبارت ممنوعه‌ای ننویس: «در دنیای امروز»، «بی‌شک»، «انقلابی»، «بازی را عوض کرد»، «شگفت‌انگیز»، «متحول می‌کند»",
-        "- هیچ فوتر، هشتگ، یا آیدی کانال اضافه نکن — کد پایتون این‌ها را اضافه می‌کند.",
-        "- هیچ عدد، قیمت یا تاریخ توهمی ننویس — فقط اطلاعاتی که در متن منبع وجود دارد.",
-        "- متن هر post حداکثر ۸۰۰ کاراکتر باشد.",
-        "- article_id باید دقیقاً همان id از آرایه ورودی باشد.",
+        "قوانین الزامی:",
+        "- برای هر مقاله یک post فارسی روان، دقیق و خلاصه (حداکثر ۶۵۰ کاراکتر) بنویس.",
+        "- فقط از تگ‌های HTML مجاز تلگرام استفاده کن: <b>, <i>, <code>",
+        "- هیچ فوتر، هشتگ یا آیدی کانال اضافه نکن.",
+        "- article_id باید دقیقاً همان id ورودی باشد.",
         "",
         "## مقالات ورودی",
-        "",
         articles_json,
     ]
     return "\n".join(prompt_parts)
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def call_gemini_batch(
     articles: list[Article],
     state: StateManager,
     cfg: AppConfig,
 ) -> GeminiNewsResponse:
-    """
-    Call Gemini API with a batch of articles.
-
-    CRITICAL: This function MUST be called (and IS called) within
-    state.gemini_quota_context() to enforce the 1-request-per-day limit.
-
-    Raises:
-        GeminiAPIError: on JSON parse failure, Pydantic validation failure,
-                        or any unrecoverable API error.
-        GeminiQuotaExhaustedError: propagated from state.gemini_quota_context()
-                                   if quota is already consumed.
-    """
     if not articles:
         raise GeminiAPIError("No articles provided for batch processing.")
 
-    # Enforce batch size limit
     batch_size = cfg.gemini_batch_size
     articles_batch = articles[:batch_size]
 
@@ -195,19 +210,15 @@ def call_gemini_batch(
         len(articles_batch),
     )
 
-    # Configure the SDK
     genai.configure(api_key=cfg.settings.gemini_api_key)
 
-    # Read prompts from disk
     system_prompt = _read_prompt("system.md")
     news_prompt = _read_prompt("news.md")
-
-    # Build the combined prompt
     full_prompt = _build_batch_prompt(articles_batch, system_prompt, news_prompt)
 
     gemini_cfg = cfg.yaml.get("gemini", {})
-    temperature = float(gemini_cfg.get("temperature", 0.7))
-    max_output_tokens = int(gemini_cfg.get("max_output_tokens", 8192))
+    temperature = float(gemini_cfg.get("temperature", 0.4))
+    max_output_tokens = int(gemini_cfg.get("max_output_tokens", 32768))
     response_mime_type = gemini_cfg.get("response_mime_type", "application/json")
 
     generation_config = genai.types.GenerationConfig(
@@ -216,36 +227,51 @@ def call_gemini_batch(
         response_mime_type=response_mime_type,
     )
 
-    # --- All Gemini API interaction wrapped in quota context ---
     with state.gemini_quota_context():
-        try:
-            model = genai.GenerativeModel(cfg.gemini_model)
-            response = model.generate_content(
-                full_prompt,
-                generation_config=generation_config,
-            )
-        except Exception as exc:
-            logger.error("Gemini API call failed: %s", exc)
-            raise GeminiAPIError(f"Gemini API call failed: {exc}") from exc
+        last_exc: Exception | None = None
+        response = None
+        for attempt in range(1, 4):
+            try:
+                model = genai.GenerativeModel(cfg.gemini_model)
+                response = model.generate_content(
+                    full_prompt,
+                    generation_config=generation_config,
+                )
+                break
+            except Exception as exc:
+                last_exc = exc
+                err_str = str(exc)
+                if ("429" in err_str or "503" in err_str or "quota" in err_str.lower()) and attempt < 3:
+                    wait_sec = 20 * attempt
+                    logger.warning(
+                        "Transient Gemini error (attempt %d/3): %s. Retrying in %ds...",
+                        attempt,
+                        exc,
+                        wait_sec,
+                    )
+                    time.sleep(wait_sec)
+                else:
+                    logger.error("Gemini API call failed: %s", exc)
+                    raise GeminiAPIError(f"Gemini API call failed: {exc}") from exc
+
+        if response is None:
+            raise GeminiAPIError(f"Gemini API call failed after retries: {last_exc}")
 
         raw_text = response.text
         logger.debug("Gemini raw response (%d chars): %s...", len(raw_text), raw_text[:200])
 
-        # Parse JSON
         try:
-            data = _safe_json_loads(raw_text)
-        except json.JSONDecodeError as exc:
-            logger.error("Failed to parse Gemini JSON response: %s\nRaw: %s", exc, raw_text[:500])
+            raw_data = _safe_json_loads(raw_text)
+            sanitized_data = _sanitize_gemini_payload(raw_data, articles_batch)
+        except Exception as exc:
+            logger.error("Failed to parse Gemini JSON response: %s\nRaw: %s", exc, raw_text[:600])
             raise GeminiAPIError(f"Gemini returned invalid JSON: {exc}") from exc
 
-        # Validate with Pydantic
         try:
-            validated = GeminiNewsResponse.model_validate(data)
+            validated = GeminiNewsResponse.model_validate(sanitized_data)
         except Exception as exc:
-            logger.error("Pydantic validation of Gemini response failed: %s\nData: %s", exc, data)
+            logger.error("Pydantic validation failed: %s\nData: %s", exc, sanitized_data)
             raise GeminiAPIError(f"Gemini response failed Pydantic validation: {exc}") from exc
 
-    logger.info(
-        "Gemini batch complete: %d posts returned.", len(validated.posts)
-    )
+    logger.info("Gemini batch complete: %d posts returned.", len(validated.posts))
     return validated
