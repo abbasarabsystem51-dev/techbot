@@ -33,6 +33,7 @@ jobs:
           PYTHONPATH: .
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           EITAA_API_KEY: ${{ secrets.EITAA_API_KEY }}
           EITAA_CHANNEL_ID: ${{ secrets.EITAA_CHANNEL_ID }}
