@@ -1,0 +1,309 @@
+{
+  "version": "1.0",
+  "total_lessons": 30,
+  "language": "fa",
+  "title": "دوره ۳۰ درسی هوش مصنوعی تک‌نیوز",
+  "description": "یک دوره جامع و کاربردی درباره هوش مصنوعی به فارسی، از مفاهیم پایه تا کاربردهای پیشرفته.",
+  "lessons": [
+    {
+      "lesson_number": 1,
+      "title": "هوش مصنوعی چیست؟",
+      "topic": "AI — تعریف و تاریخچه",
+      "category": "fundamentals",
+      "concepts": ["AI", "machine intelligence", "Turing test"],
+      "summary": "تعریف دقیق هوش مصنوعی، تفاوت با نرم‌افزارهای معمولی، و یک نگاه کوتاه به تاریخچه آن از دهه ۱۹۵۰ تا امروز.",
+      "everyday_example": "وقتی Netflix پیشنهاد فیلم می‌دهد، یک سیستم AI در حال کار است.",
+      "exercise": "یک برنامه که روزانه استفاده می‌کنی را نام ببر و بگو کجا فکر می‌کنی AI دارد."
+    },
+    {
+      "lesson_number": 2,
+      "title": "یادگیری ماشین (Machine Learning) چیست؟",
+      "topic": "Machine Learning — مفهوم پایه",
+      "category": "fundamentals",
+      "concepts": ["ML", "training data", "model", "prediction"],
+      "summary": "تفاوت برنامه‌نویسی سنتی با Machine Learning، مفهوم داده آموزشی، و اینکه مدل چطور یاد می‌گیرد.",
+      "everyday_example": "فیلتر اسپم ایمیل با مثال‌های ایمیل‌های اسپم و غیر اسپم یاد می‌گیرد.",
+      "exercise": "یک مثال از ML در زندگی روزمره‌ات پیدا کن که قبلاً بهش فکر نکرده بودی."
+    },
+    {
+      "lesson_number": 3,
+      "title": "انواع یادگیری ماشین",
+      "topic": "Supervised vs Unsupervised vs Reinforcement Learning",
+      "category": "fundamentals",
+      "concepts": ["supervised learning", "unsupervised learning", "reinforcement learning", "labels"],
+      "summary": "سه نوع اصلی ML: supervised (با برچسب)، unsupervised (بدون برچسب)، و reinforcement (پاداش‌محور). هرکدام کجا استفاده می‌شوند.",
+      "everyday_example": "یاد دادن به بچه با نشان دادن عکس و گفتن «گربه» = supervised learning.",
+      "exercise": "سه مثال از اپ‌هایی که استفاده می‌کنی بنویس و بگو کدام نوع ML دارند."
+    },
+    {
+      "lesson_number": 4,
+      "title": "شبکه‌های عصبی (Neural Networks)",
+      "topic": "Neural Networks — معماری پایه",
+      "category": "fundamentals",
+      "concepts": ["neuron", "layer", "activation function", "backpropagation"],
+      "summary": "الهام از مغز انسان، نورون‌های مصنوعی، لایه‌های ورودی/مخفی/خروجی، و چطور اشتباه‌ها با backpropagation اصلاح می‌شوند.",
+      "everyday_example": "یاد گرفتن دوچرخه‌سواری: هر بار که می‌افتی، مغزت تنظیم می‌شود — backpropagation همین است.",
+      "exercise": "یک شبکه عصبی ساده با ورق و قلم برای تشخیص «داغ/سرد» طراحی کن."
+    },
+    {
+      "lesson_number": 5,
+      "title": "یادگیری عمیق (Deep Learning)",
+      "topic": "Deep Learning — تعریف و تفاوت با ML کلاسیک",
+      "category": "fundamentals",
+      "concepts": ["deep learning", "deep neural network", "feature extraction", "GPU"],
+      "summary": "چرا «عمیق»؟ شبکه‌های چند لایه، استخراج خودکار ویژگی، و اینکه چرا GPU برای آموزش ضروری است.",
+      "everyday_example": "تشخیص چهره در گوشی: مدل خودش یاد گرفته لبه، چشم، و صورت را تشخیص دهد.",
+      "exercise": "مدل‌های deep learning را در سه اپ که روزانه استفاده می‌کنی پیدا کن."
+    },
+    {
+      "lesson_number": 6,
+      "title": "مدل‌های زبانی بزرگ (LLM) چیستند؟",
+      "topic": "Large Language Models — مفهوم و عملکرد",
+      "category": "llm",
+      "concepts": ["LLM", "GPT", "token", "next-token prediction", "transformer"],
+      "summary": "LLM چطور کار می‌کند؟ پیش‌بینی کلمه بعدی، مفهوم token، و چرا این مدل‌ها قابلیت‌های گسترده دارند.",
+      "everyday_example": "پیش‌بینی متن پیام در کیبورد گوشی — LLM همان کار را در مقیاس بسیار بزرگ‌تر انجام می‌دهد.",
+      "exercise": "در ChatGPT یا Gemini یک جمله ناقص بنویس و ببین چطور کامل می‌کند."
+    },
+    {
+      "lesson_number": 7,
+      "title": "معماری Transformer",
+      "topic": "Transformer — توجه (Attention) و چرا مهم است",
+      "category": "llm",
+      "concepts": ["transformer", "attention mechanism", "self-attention", "encoder", "decoder"],
+      "summary": "چرا Transformer (2017) همه چیز را عوض کرد؟ مکانیزم attention چطور می‌فهمد کدام کلمه با کدام مرتبط است.",
+      "everyday_example": "وقتی می‌خوانی «بانک رودخانه» vs «بانک پول»، مغزت از context استفاده می‌کند — attention همین است.",
+      "exercise": "جمله «مارک چیزی خورد که دوست داشت» را بخوان؛ «آن» به چه اشاره دارد؟ — این را attention حل می‌کند."
+    },
+    {
+      "lesson_number": 8,
+      "title": "Prompt Engineering — اصول اولیه",
+      "topic": "Prompt Engineering — نوشتن دستورالعمل مؤثر",
+      "category": "practical",
+      "concepts": ["prompt", "instruction", "context", "role", "few-shot"],
+      "summary": "چطور از مدل‌های AI بهترین نتیجه بگیریم؟ اصول اولیه: وضوح، context، نقش (role)، و مثال‌های few-shot.",
+      "everyday_example": "تفاوت «بنویس» و «مثل یک متخصص بازاریابی برای کسب‌وکار B2B بنویس» — prompt دوم نتیجه بهتری دارد.",
+      "exercise": "یک پرامپت ضعیف بنویس، سپس همان را با اضافه کردن نقش، context و مثال بهبود بده."
+    },
+    {
+      "lesson_number": 9,
+      "title": "تکنیک‌های پیشرفته Prompt",
+      "topic": "Chain-of-Thought, Few-Shot, Zero-Shot",
+      "category": "practical",
+      "concepts": ["chain-of-thought", "few-shot prompting", "zero-shot", "step-by-step reasoning"],
+      "summary": "Chain-of-Thought: درخواست تفکر گام‌به‌گام. Few-shot: دادن مثال. Zero-shot: بدون مثال. هر کدام کِی؟",
+      "everyday_example": "وقتی از کسی می‌خواهی «فکرت را توضیح بده» — این Chain-of-Thought prompting است.",
+      "exercise": "یک مسئله ریاضی را با دو پرامپت مختلف (مستقیم vs chain-of-thought) از Gemini بخواه."
+    },
+    {
+      "lesson_number": 10,
+      "title": "RAG — بازیابی با تولید",
+      "topic": "Retrieval-Augmented Generation — RAG چیست؟",
+      "category": "llm",
+      "concepts": ["RAG", "vector database", "embedding", "retrieval", "grounding"],
+      "summary": "مشکل hallucination در LLMها، راه‌حل RAG: جستجو در اسناد واقعی قبل از تولید پاسخ، و کاربردهای عملی.",
+      "everyday_example": "وکیلی که قبل از پاسخ، قوانین مرتبط را جستجو می‌کند — RAG همین است.",
+      "exercise": "در Gemini Advanced یا ChatGPT Plus یک سند PDF آپلود کن و سؤال بپرس."
+    },
+    {
+      "lesson_number": 11,
+      "title": "Fine-tuning — شخصی‌سازی مدل",
+      "topic": "Fine-tuning vs Prompting vs RAG",
+      "category": "llm",
+      "concepts": ["fine-tuning", "PEFT", "LoRA", "base model", "domain adaptation"],
+      "summary": "چرا fine-tuning؟ تفاوت با prompting و RAG، روش‌های کارآمد مثل LoRA، و کِی ارزش دارد.",
+      "everyday_example": "تفاوت یک پزشک عمومی و یک متخصص قلب — fine-tuning مدل را متخصص می‌کند.",
+      "exercise": "برای سه کاربرد مختلف، تشخیص بده که prompting کافی است یا fine-tuning نیاز است."
+    },
+    {
+      "lesson_number": 12,
+      "title": "توکن و Context Window",
+      "topic": "Token، Context Length و محدودیت‌های مدل",
+      "category": "llm",
+      "concepts": ["token", "context window", "context length", "truncation"],
+      "summary": "توکن چیست؟ چرا context window محدود است؟ اثر طول پرامپت روی کیفیت پاسخ و هزینه.",
+      "everyday_example": "ظرفیت حافظه کوتاه‌مدت انسان — context window مثل همان است.",
+      "exercise": "در یک LLM یک مکالمه طولانی داشته باش و ببین کِی مدل اطلاعات اول را «فراموش» می‌کند."
+    },
+    {
+      "lesson_number": 13,
+      "title": "هوش مصنوعی چندوجهی (Multimodal AI)",
+      "topic": "Multimodal — تصویر، صدا، ویدئو با AI",
+      "category": "applications",
+      "concepts": ["multimodal AI", "vision-language model", "CLIP", "GPT-4o", "Gemini"],
+      "summary": "مدل‌هایی که هم متن، هم تصویر، هم صدا می‌فهمند. چطور کار می‌کنند و کجا استفاده می‌شوند.",
+      "everyday_example": "گوگل لنز که عکس گل می‌گیرد و اسمش را می‌گوید — multimodal AI.",
+      "exercise": "یک عکس از محیط اطرافت بگیر و در Gemini یا ChatGPT آپلود کن، چند سؤال بپرس."
+    },
+    {
+      "lesson_number": 14,
+      "title": "AI Agent — عامل‌های هوش مصنوعی",
+      "topic": "AI Agents — تعریف، ابزار و استقلال",
+      "category": "applications",
+      "concepts": ["AI agent", "tool use", "function calling", "planning", "memory"],
+      "summary": "تفاوت chatbot با agent: agent می‌تواند ابزار استفاده کند، برنامه‌ریزی کند و کارهای چندمرحله‌ای انجام دهد.",
+      "everyday_example": "منشی که نه تنها جواب می‌دهد بلکه ایمیل می‌فرستد و قرار ملاقات می‌گذارد — این agent است.",
+      "exercise": "در Claude یا Gemini Advanced از قابلیت ابزار (web search) استفاده کن."
+    },
+    {
+      "lesson_number": 15,
+      "title": "هوش مصنوعی تولیدی (Generative AI)",
+      "topic": "Generative AI — متن، تصویر، صدا، ویدئو",
+      "category": "applications",
+      "concepts": ["generative AI", "diffusion model", "GAN", "text-to-image", "DALL-E", "Stable Diffusion"],
+      "summary": "مدل‌های generative چطور محتوای جدید می‌سازند؟ diffusion models، GAN، و کاربردهای عملی در هر رسانه.",
+      "everyday_example": "Midjourney که از توضیح متنی تصویر می‌سازد — generative AI.",
+      "exercise": "با یک ابزار text-to-image (مثلاً Ideogram یا DALL-E) یک تصویر ایجاد کن."
+    },
+    {
+      "lesson_number": 16,
+      "title": "اخلاق در هوش مصنوعی",
+      "topic": "AI Ethics — تعصب، شفافیت، مسئولیت",
+      "category": "ethics",
+      "concepts": ["AI bias", "fairness", "transparency", "accountability", "AI safety"],
+      "summary": "تعصب در داده‌ها، تعصب در مدل، مسئولیت تصمیمات AI، و اینکه چرا این موضوع‌ها برای همه مهم است.",
+      "everyday_example": "سیستم استخدام که به عمد یا غیرعمد علیه گروه‌هایی تبعیض دارد — AI bias.",
+      "exercise": "یک سیستم AI (مثل توصیه‌گر) را بررسی کن: چه گروهی ممکن است آسیب ببیند؟"
+    },
+    {
+      "lesson_number": 17,
+      "title": "امنیت و حریم خصوصی در AI",
+      "topic": "AI Security — Prompt Injection, Data Privacy",
+      "category": "ethics",
+      "concepts": ["prompt injection", "jailbreak", "data privacy", "GDPR", "model inversion"],
+      "summary": "حملات prompt injection، خطرات داده‌های شخصی در مدل‌های AI، و چطور از اطلاعات خود محافظت کنیم.",
+      "everyday_example": "ارسال اطلاعات شخصی به ChatGPT — آیا امن است؟",
+      "exercise": "قوانین حریم خصوصی یک ابزار AI که استفاده می‌کنی را بخوان."
+    },
+    {
+      "lesson_number": 18,
+      "title": "هوش مصنوعی در کار و شغل",
+      "topic": "AI در محیط کار — اتوماسیون و مهارت‌های جدید",
+      "category": "applications",
+      "concepts": ["automation", "augmentation", "upskilling", "future of work", "AI copilot"],
+      "summary": "کدام مشاغل بیشتر تغییر می‌کنند؟ تفاوت اتوماسیون و تقویت (augmentation)، و مهارت‌هایی که ارزش بیشتری پیدا می‌کنند.",
+      "everyday_example": "GitHub Copilot که به برنامه‌نویس کمک می‌کند، نه جایش را می‌گیرد.",
+      "exercise": "سه کار از شغلت را بنویس که AI می‌تواند کمک کند کارآمدتر انجام دهی."
+    },
+    {
+      "lesson_number": 19,
+      "title": "Embedding و جستجوی معنایی",
+      "topic": "Embeddings — نمایش معنایی متن",
+      "category": "technical",
+      "concepts": ["embedding", "vector", "semantic search", "cosine similarity", "vector database"],
+      "summary": "embeddings چطور معنا را به عدد تبدیل می‌کنند، جستجوی معنایی در مقابل جستجوی کلمه‌کلیدی، و کاربردها.",
+      "everyday_example": "جستجوی «ماشین» که «خودرو» را هم پیدا می‌کند — جستجوی معنایی.",
+      "exercise": "دو جمله بنویس که معنای یکسانی دارند. چطور می‌توانیم این شباهت را اندازه بگیریم؟"
+    },
+    {
+      "lesson_number": 20,
+      "title": "API هوش مصنوعی — شروع به کار",
+      "topic": "AI API — کار با Gemini, OpenAI API",
+      "category": "practical",
+      "concepts": ["API", "API key", "REST", "endpoint", "rate limit"],
+      "summary": "API چیست، چطور یک API key بگیریم، یک درخواست ساده به Gemini API بفرستیم، و هزینه‌ها چطور حساب می‌شوند.",
+      "everyday_example": "تحویل غذا از طریق اپ — API مثل همان سیستم سفارش‌گیری است.",
+      "exercise": "در Google AI Studio یک API key بگیر و اولین درخواست را با curl یا Postman بفرست."
+    },
+    {
+      "lesson_number": 21,
+      "title": "ساخت اپلیکیشن با AI — اصول اولیه",
+      "topic": "AI Application Development — معماری پایه",
+      "category": "practical",
+      "concepts": ["LLM application", "input validation", "output parsing", "error handling", "streaming"],
+      "summary": "معماری یک اپلیکیشن ساده مبتنی بر LLM: دریافت ورودی، ارسال به مدل، پردازش خروجی، و مدیریت خطا.",
+      "everyday_example": "ربات کمک‌کننده در وبسایت — یک اپلیکیشن ساده AI.",
+      "exercise": "یک flowchart ساده برای ربات Q&A طراحی کن: ورودی → پردازش → خروجی."
+    },
+    {
+      "lesson_number": 22,
+      "title": "هوش مصنوعی در بهداشت و پزشکی",
+      "topic": "AI در پزشکی — تشخیص، کشف دارو، مراقبت شخصی",
+      "category": "applications",
+      "concepts": ["medical AI", "diagnostic AI", "drug discovery", "FDA approval", "clinical trial"],
+      "summary": "کاربردهای واقعی AI در تشخیص بیماری، کشف داروهای جدید (مثلاً AlphaFold)، و اینکه هنوز جایگزین پزشک نمی‌شود.",
+      "everyday_example": "اپ‌هایی که ضربان قلب را از دوربین گوشی تشخیص می‌دهند.",
+      "exercise": "درباره AlphaFold و کشف پروتئین‌ها تحقیق کن — چرا برنده نوبل شد؟"
+    },
+    {
+      "lesson_number": 23,
+      "title": "هوش مصنوعی در آموزش",
+      "topic": "AI در Education — شخصی‌سازی یادگیری",
+      "category": "applications",
+      "concepts": ["personalized learning", "adaptive learning", "AI tutor", "Khan Academy AI", "cheating detection"],
+      "summary": "چطور AI یادگیری را شخصی می‌کند؟ مزایا و معایب ابزارهای AI در کلاس درس، و تقلب دانشجویان.",
+      "everyday_example": "Duolingo که بر اساس عملکرد تو، درس‌ها را تنظیم می‌کند.",
+      "exercise": "یک ابزار AI برای یادگیری (مثل Khan Academy AI) امتحان کن."
+    },
+    {
+      "lesson_number": 24,
+      "title": "کامپیوتر بینایی (Computer Vision)",
+      "topic": "Computer Vision — تشخیص تصویر و ویدئو",
+      "category": "technical",
+      "concepts": ["computer vision", "CNN", "object detection", "YOLO", "image segmentation"],
+      "summary": "CNN چطور ویژگی‌های تصویر را یاد می‌گیرد؟ تشخیص شیء، تقسیم‌بندی تصویر، و کاربردهای عملی.",
+      "everyday_example": "دوربین گوشی که صورت را تشخیص می‌دهد و فوکوس می‌کند.",
+      "exercise": "Teachable Machine گوگل را امتحان کن: مدلی برای تشخیص دو شیء مختلف آموزش بده."
+    },
+    {
+      "lesson_number": 25,
+      "title": "پردازش زبان طبیعی (NLP) کاربردی",
+      "topic": "NLP — تحلیل احساس، ترجمه، خلاصه‌سازی",
+      "category": "technical",
+      "concepts": ["NLP", "sentiment analysis", "machine translation", "summarization", "named entity recognition"],
+      "summary": "کاربردهای عملی NLP: تحلیل احساسات (نظرات مشتریان)، ترجمه، خلاصه‌سازی، و استخراج اطلاعات.",
+      "everyday_example": "Google Translate که جمله را معنایی ترجمه می‌کند، نه کلمه‌به‌کلمه.",
+      "exercise": "ده نظر محصول مختلف را در یک ابزار NLP (مثلاً TextBlob یا Gemini) تحلیل احساس کن."
+    },
+    {
+      "lesson_number": 26,
+      "title": "هوش مصنوعی مسئولانه (Responsible AI)",
+      "topic": "Responsible AI — خطوط راهنمای عملی",
+      "category": "ethics",
+      "concepts": ["responsible AI", "AI governance", "red-teaming", "model evaluation", "safety testing"],
+      "summary": "Responsible AI یعنی چه؟ چطور مدل‌ها را ارزیابی می‌کنند؟ red-teaming، safety testing، و governance.",
+      "everyday_example": "شرکت‌های بزرگ AI که تیم‌هایی فقط برای پیدا کردن ایرادهای مدل دارند.",
+      "exercise": "سه سؤال طراحی کن که یک مدل AI نباید به آن‌ها پاسخ دهد و چرا."
+    },
+    {
+      "lesson_number": 27,
+      "title": "آینده هوش مصنوعی — AGI و فراتر",
+      "topic": "AGI، ASI و بحث‌های آینده‌شناختی",
+      "category": "future",
+      "concepts": ["AGI", "ASI", "alignment", "existential risk", "AI winter", "AI spring"],
+      "summary": "تفاوت ANI (باریک)، AGI (عمومی) و ASI (فوق‌انسانی). چرا alignment مهم است؟ دیدگاه‌های مختلف خبرگان.",
+      "everyday_example": "AlphaGo فقط گو بازی می‌کند — این ANI است، نه AGI.",
+      "exercise": "نظر یک متخصص مثبت (مثل Yann LeCun) و یک متخصص نگران (مثل Geoffrey Hinton) را مقایسه کن."
+    },
+    {
+      "lesson_number": 28,
+      "title": "هوش مصنوعی و محیط زیست",
+      "topic": "AI Carbon Footprint — مصرف انرژی و پایداری",
+      "category": "ethics",
+      "concepts": ["AI carbon footprint", "energy consumption", "data center", "green AI", "model efficiency"],
+      "summary": "هزینه محیط‌زیستی آموزش و استفاده از مدل‌های بزرگ، مقایسه مدل‌ها از نظر کارایی، و تلاش‌ها برای Green AI.",
+      "everyday_example": "آموزش GPT-3 به اندازه رفت‌وآمد ۳۰۰ ماشین در یک سال انرژی مصرف کرد.",
+      "exercise": "محاسبه کن که استفاده روزانه‌ات از ابزارهای AI تقریباً چقدر انرژی مصرف می‌کند."
+    },
+    {
+      "lesson_number": 29,
+      "title": "ابزارهای AI برای بهره‌وری شخصی",
+      "topic": "AI Productivity Stack — بهترین ابزارها برای کارهای روزمره",
+      "category": "practical",
+      "concepts": ["AI productivity", "Notion AI", "Perplexity", "AI writing assistant", "automation"],
+      "summary": "ابزارهای AI برای نوشتن، تحقیق، مدیریت وظایف، و خودکارسازی کارهای تکراری — راهنمای عملی.",
+      "everyday_example": "از Perplexity برای تحقیق، Gemini برای نوشتن ایمیل، و Otter.ai برای رونویسی جلسات.",
+      "exercise": "یک workflow کاری که الان دستی انجام می‌دهی را با یک ابزار AI بهبود بده."
+    },
+    {
+      "lesson_number": 30,
+      "title": "جمع‌بندی — نقشه راه یادگیری AI",
+      "topic": "Learning Roadmap — قدم بعدی تو چیست؟",
+      "category": "practical",
+      "concepts": ["learning path", "AI career", "resources", "community", "continuous learning"],
+      "summary": "مرور سفر ۳۰ درسی، منابع پیشنهادی برای ادامه یادگیری (رایگان و پولی)، و نقشه راه بر اساس هدف هر فرد.",
+      "everyday_example": "یادگیری AI مثل یادگیری یک زبان خارجی است — هرچه بیشتر استفاده کنی، بهتر می‌شوی.",
+      "exercise": "یک هدف ۳ ماهه AI برای خودت بنویس و یک قدم اول مشخص تعریف کن."
+    }
+  ]
+}
