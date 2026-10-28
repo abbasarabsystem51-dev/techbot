@@ -101,7 +101,7 @@ schedule:
 
 # ── Gemini API ────────────────────────────────────────────────
 gemini:
-  model: "gemini-2.5-flash"
+  model: "gemini-3.8-flash"
   max_requests_per_day: 1
   batch_size: 12
   temperature: 0.7
