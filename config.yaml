@@ -1,7 +1,5 @@
 # =============================================================
 # TechBot — Main Configuration
-# All user-tunable settings live here.
-# Secrets (API keys, tokens) go in .env — never here.
 # =============================================================
 
 # ── Bot identity ──────────────────────────────────────────────
@@ -11,11 +9,6 @@ bot:
   timezone: "Asia/Tehran"
 
 # ── RSS Sources ───────────────────────────────────────────────
-# Each source:
-#   url      : RSS feed URL
-#   category : "ai" | "tech"
-#   weight   : relative scoring weight (higher = preferred)
-#   enabled  : true/false
 sources:
   - name: "TechCrunch AI"
     url: "https://techcrunch.com/category/artificial-intelligence/feed/"
@@ -57,13 +50,11 @@ sources:
 fetching:
   timeout_seconds: 10
   max_items_per_source: 20
-  # Freshness window: only consider items published within this many hours
   freshness_hours: 48
   user_agent: "TechBot/1.0 (+https://t.me/tech_news_110)"
 
 # ── Scoring ───────────────────────────────────────────────────
 scoring:
-  # Keywords that boost AI relevance score (case-insensitive)
   ai_keywords:
     - "artificial intelligence"
     - "machine learning"
@@ -84,14 +75,10 @@ scoring:
     - "fine-tuning"
     - "rag"
     - "multimodal"
-  # Weight for freshness (hours old → score penalty)
   freshness_weight: 0.05
-  # Minimum score to be eligible for posting
   min_score: 0.3
 
 # ── Daily Schedule ────────────────────────────────────────────
-# 10 posts/day: 7 AI + 3 tech
-# 5 time slots × 2 posts per slot, with a gap between the two
 schedule:
   slots:
     - time: "09:00"
@@ -109,37 +96,27 @@ schedule:
     - time: "21:00"
       posts: 2
       gap_minutes: 8
-  # Lesson post: one per day (appended to first slot of the week on Mon)
   lesson_slot: "09:00"
-  lesson_day: "monday"  # day of week for lesson post
+  lesson_day: "monday"
 
 # ── Gemini API ────────────────────────────────────────────────
 gemini:
-  # Model name — use a stable, free-tier compatible model
-  model: "gemini-1.5-flash"
-  # Hard limit: 1 batch request per calendar day (UTC+3:30)
+  model: "gemini-2.5-flash"
   max_requests_per_day: 1
-  # Number of articles to send in a single batch request
   batch_size: 12
-  # Generation parameters
   temperature: 0.7
   max_output_tokens: 8192
-  # Response MIME type — we always request JSON
   response_mime_type: "application/json"
 
 # ── Post format ───────────────────────────────────────────────
 post:
-  # Hard ceiling on the total published post (text + footer + hashtags + links)
   max_chars: 1024
-  # Footer text appended by Python (not the model)
   footer: "\n\n📡 @tech_news_110"
-  # Hashtags per category (appended by Python)
   hashtags:
     ai: "#هوش_مصنوعی #AI #تک_نیوز"
     tech: "#فناوری #Tech #تک_نیوز"
     lesson: "#آموزش #AI #هوش_مصنوعی #تک_نیوز"
     tool: "#ابزار #AI_Tools #تک_نیوز"
-  # Inline keyboard buttons (Telegram / Eitaa)
   buttons:
     source_label: "📰 منبع"
     read_more_label: "🔗 بیشتر بخوان"
@@ -149,10 +126,8 @@ destinations:
   telegram:
     enabled: true
     parse_mode: "HTML"
-    # Max retries on transient errors (not quota exhaustion)
     max_retries: 3
     retry_delay_seconds: 5
-    # Delay between consecutive posts (seconds)
     inter_post_delay_seconds: 2
 
   eitaa:
@@ -165,25 +140,18 @@ destinations:
 # ── Database ──────────────────────────────────────────────────
 database:
   path: "data/techbot.sqlite"
-  # WAL mode for concurrent access
   wal_mode: true
-  # Busy timeout in milliseconds
   busy_timeout_ms: 5000
 
 # ── Logging ───────────────────────────────────────────────────
 logging:
   level: "INFO"
-  # Log file path (relative to project root)
   file: "logs/techbot.log"
-  # Max size before rotation (bytes)
-  max_bytes: 10485760   # 10 MB
+  max_bytes: 10485760
   backup_count: 5
-  # Console output: true in development, false in production
   console: true
 
 # ── Curriculum ────────────────────────────────────────────────
 curriculum:
-  # Path to the JSON file with the 30-lesson plan
   path: "curriculum.json"
-  # Lessons repeat after reaching the end
   loop: true
