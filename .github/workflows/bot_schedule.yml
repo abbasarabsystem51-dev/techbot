@@ -4,7 +4,7 @@ on:
   schedule:
     # اجرا در ساعات 05:30, 08:30, 11:30, 14:30, 17:30 UTC (معادل 09:00، 12:00، 15:00، 18:00، 21:00 به وقت ایران)
     - cron: '30 5,8,11,14,17 * * *'
-  workflow_dispatch: # امکان اجرای دستی با یک کلیک در پنل گیت‌هاب
+  workflow_dispatch:
 
 jobs:
   run-techbot:
@@ -25,12 +25,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Ensure Data Directory Exists
+        run: mkdir -p data
+
       - name: Run TechBot Pipeline
         env:
+          PYTHONPATH: .
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           EITAA_API_KEY: ${{ secrets.EITAA_API_KEY }}
           EITAA_CHANNEL_ID: ${{ secrets.EITAA_CHANNEL_ID }}
         run: |
-          python src/main.py run-once
+          python -m src.main run-once
