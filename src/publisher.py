@@ -117,19 +117,27 @@ class Publisher:
                 results["eitaa"] = False
 
         # Update post-level status in DB
+        telegram_ok = results.get("telegram", False)
         all_succeeded = all(results.get(d, False) for d in enabled_destinations)
-        any_failed = any(not results.get(d, True) for d in enabled_destinations)
+        any_succeeded = any(results.get(d, False) for d in enabled_destinations)
 
         if all_succeeded:
             self._state.mark_post_published(post.id)
             logger.info(
                 "Post %s: PUBLISHED to %s.", post.id[:16], ", ".join(enabled_destinations)
             )
-        elif any_failed:
-            # Only mark failed if it wasn't already published from a previous partial run
+        elif telegram_ok or any_succeeded:
+            # Primary channel (Telegram) succeeded, or at least one destination succeeded
+            self._state.mark_post_published(post.id)
+            logger.warning(
+                "Post %s: PUBLISHED with partial delivery. Results: %s",
+                post.id[:16],
+                results,
+            )
+        else:
             self._state.mark_post_failed(post.id)
             logger.warning(
-                "Post %s: FAILED on some destinations. Results: %s",
+                "Post %s: FAILED on all destinations. Results: %s",
                 post.id[:16],
                 results,
             )

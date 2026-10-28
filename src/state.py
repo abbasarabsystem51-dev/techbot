@@ -52,6 +52,10 @@ class StateManager:
     def __init__(self, db: Database) -> None:
         self._db = db
 
+    def checkpoint(self) -> None:
+        """Flush SQLite WAL to main database file."""
+        self._db.checkpoint()
+
     # =========================================================================
     # Gemini Quota — core concurrency-safety mechanism
     # =========================================================================

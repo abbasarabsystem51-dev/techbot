@@ -48,12 +48,13 @@ def _bootstrap():
     curriculum_path: Path = cfg.curriculum_path
     if curriculum_path.exists():
         try:
-            lessons = json.loads(curriculum_path.read_text(encoding="utf-8"))
-            if isinstance(lessons, list):
+            raw_data = json.loads(curriculum_path.read_text(encoding="utf-8"))
+            lessons = raw_data if isinstance(raw_data, list) else raw_data.get("lessons", [])
+            if isinstance(lessons, list) and lessons:
                 state.initialize_curriculum(lessons)
                 logger.debug("Curriculum initialized from %s (%d lessons).", curriculum_path, len(lessons))
             else:
-                logger.warning("curriculum.json is not a list — skipping curriculum init.")
+                logger.warning("curriculum.json does not contain valid lessons — skipping curriculum init.")
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to load curriculum.json: %s", exc)
     else:
@@ -74,6 +75,7 @@ def cmd_run_once(args: argparse.Namespace) -> int:
         scheduler = TechBotScheduler(cfg, state, publisher)
         logger.info("Running one-shot pipeline (dry_run=%s)...", args.dry_run)
         scheduler.run_once(dry_run=args.dry_run)
+        state.checkpoint()
         logger.info("run-once complete.")
         return 0
     except Exception as exc:  # noqa: BLE001
@@ -103,6 +105,11 @@ def cmd_status(args: argparse.Namespace) -> int:  # noqa: ARG001
     try:
         cfg, state = _bootstrap()
         report = state.format_status_report()
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
         print(report)
         return 0
     except Exception as exc:  # noqa: BLE001
@@ -153,6 +160,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print current DB and Gemini quota status",
     )
     status_parser.set_defaults(func=cmd_status)
+
+    for p in (run_once_parser, serve_parser):
+        p.add_argument(
+            "--dry-run",
+            action="store_true",
+            default=False,
+            help="Full run without actually sending to Telegram/Eitaa",
+        )
 
     return parser
 

@@ -10,6 +10,7 @@ src/telegram.py — آداپتور Telegram Bot API
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Optional
 
@@ -135,6 +136,16 @@ class TelegramPublisher:
                         )
                         logger.info("Rate-limited by Telegram. Waiting %ds...", retry_after)
                         time.sleep(retry_after)
+                    elif resp.status_code == 400 and ("entity" in error_desc.lower() or "parse" in error_desc.lower()):
+                        logger.warning("Telegram 400 parse error detected: %s. Retrying with stripped plain text...", error_desc)
+                        plain_text = re.sub(r"<[^>]+>", "", payload["text"])
+                        payload["text"] = plain_text
+                        payload.pop("parse_mode", None)
+                        continue
+                    elif resp.status_code == 400 and ("button" in error_desc.lower() or "reply_markup" in error_desc.lower() or "url" in error_desc.lower()):
+                        logger.warning("Telegram 400 reply_markup/URL error: %s. Retrying without keyboard...", error_desc)
+                        payload.pop("reply_markup", None)
+                        continue
                     elif self._is_transient(resp.status_code):
                         time.sleep(self._retry_delay)
                     else:

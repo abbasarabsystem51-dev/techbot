@@ -55,31 +55,48 @@ class Settings(BaseSettings):
 
     # ── Telegram ─────────────────────────────────────────────────────────────
     telegram_bot_token: str
-    telegram_channel_id: str
+    telegram_channel_id: str = ""
+    telegram_chat_id: str = ""
 
     # ── Eitaa ────────────────────────────────────────────────────────────────
     eitaa_bot_token: str = ""
+    eitaa_api_key: str = ""
     eitaa_channel_id: str = ""
 
     # ── Optional overrides ───────────────────────────────────────────────────
     techbot_db_path: str = ""       # overrides database.path from config.yaml
     techbot_log_level: str = ""     # overrides logging.level from config.yaml
 
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            tg_ch = data.get("telegram_channel_id") or data.get("telegram_chat_id") or "@tech_news_110"
+            data["telegram_channel_id"] = str(tg_ch).strip()
+            data["telegram_chat_id"] = str(tg_ch).strip()
+
+            eitaa_tok = data.get("eitaa_bot_token") or data.get("eitaa_api_key") or ""
+            data["eitaa_bot_token"] = str(eitaa_tok).strip()
+            data["eitaa_api_key"] = str(eitaa_tok).strip()
+
+            eitaa_ch = data.get("eitaa_channel_id") or ""
+            data["eitaa_channel_id"] = str(eitaa_ch).strip()
+        return data
+
     @field_validator("gemini_api_key", "telegram_bot_token", "telegram_channel_id")
     @classmethod
     def must_not_be_empty(cls, v: str, info: Any) -> str:  # noqa: ANN401
-        if not v or not v.strip():
+        if not v or not str(v).strip():
             raise ValueError(f"Environment variable for '{info.field_name}' must not be empty.")
-        return v.strip()
+        return str(v).strip()
 
     @model_validator(mode="after")
     def warn_missing_eitaa(self) -> "Settings":
         if not self.eitaa_bot_token or not self.eitaa_channel_id:
-            logger.warning(
-                "EITAA_BOT_TOKEN or EITAA_CHANNEL_ID is not set — Eitaa publishing will be skipped."
+            logger.info(
+                "EITAA_BOT_TOKEN/EITAA_API_KEY or EITAA_CHANNEL_ID is not set — Eitaa publishing will be skipped."
             )
         return self
-
 
 # ---------------------------------------------------------------------------
 # YAML config loader
@@ -193,7 +210,9 @@ class AppConfig:
 
     @property
     def eitaa_enabled(self) -> bool:
-        return bool(self.yaml.get("destinations", {}).get("eitaa", {}).get("enabled", True))
+        yaml_enabled = bool(self.yaml.get("destinations", {}).get("eitaa", {}).get("enabled", True))
+        has_credentials = bool(self.settings.eitaa_bot_token and self.settings.eitaa_channel_id)
+        return yaml_enabled and has_credentials
 
     def __repr__(self) -> str:  # pragma: no cover
         return (

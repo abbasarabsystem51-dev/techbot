@@ -171,8 +171,9 @@ class EitaaPublisher:
                     use_keyboard = False
                     continue
 
-                if error and "permanent" in error:
-                    break  # Non-transient error, stop retrying
+                if error and ("permanent" in error or "name or service not known" in error.lower() or "nodename nor servname" in error.lower()):
+                    logger.warning("Eitaa host unreachable or permanent error: %s — skipping further retries.", error)
+                    break
 
                 if attempt <= self._max_retries:
                     time.sleep(self._retry_delay)

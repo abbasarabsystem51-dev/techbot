@@ -97,7 +97,7 @@ schedule:
 gemini:
   model: "gemini-3.8-flash"
   max_requests_per_day: 10
-  batch_size: 5
+  batch_size: 3
   temperature: 0.4
   max_output_tokens: 32768
   response_mime_type: "application/json"
@@ -124,7 +124,7 @@ destinations:
 
   eitaa:
     enabled: true
-    base_url: "https://eitaacloud.ir/bot"
+    base_url: "https://eitaayar.ir/api"
     max_retries: 3
     retry_delay_seconds: 5
     inter_post_delay_seconds: 3

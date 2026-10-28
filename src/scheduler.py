@@ -128,8 +128,9 @@ class TechBotScheduler:
                     post.id[:12],
                     post.category.value,
                 )
-                ok = self._publisher.publish(post, dry_run=dry_run)
-                if ok:
+                res = self._publisher.publish(post, dry_run=dry_run)
+                is_ok = dry_run or (res.get("telegram", False) or res.get("eitaa", False) if isinstance(res, dict) else bool(res))
+                if is_ok:
                     published_count += 1
                 if idx < len(posts):
                     time.sleep(3)

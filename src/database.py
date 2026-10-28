@@ -191,8 +191,20 @@ class Database:
             conn.commit()
         logger.debug("Database schema initialised.")
 
+    def checkpoint(self) -> None:
+        """Run WAL checkpoint to flush changes to disk."""
+        try:
+            with self._lock:
+                conn = self._connect()
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.commit()
+            logger.debug("Database WAL checkpoint completed.")
+        except Exception as exc:
+            logger.warning("WAL checkpoint error: %s", exc)
+
     def close(self) -> None:
         """Close the per-thread connection if open."""
+        self.checkpoint()
         conn = getattr(self._local, "conn", None)
         if conn:
             conn.close()

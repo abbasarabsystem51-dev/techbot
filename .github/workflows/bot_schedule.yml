@@ -25,6 +25,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Restore SQLite Database Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: techbot-sqlite-${{ github.run_id }}
+          restore-keys: |
+            techbot-sqlite-
+
       - name: Ensure Data Directory Exists
         run: mkdir -p data
 
@@ -35,7 +43,15 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EITAA_BOT_TOKEN: ${{ secrets.EITAA_API_KEY }}
           EITAA_API_KEY: ${{ secrets.EITAA_API_KEY }}
           EITAA_CHANNEL_ID: ${{ secrets.EITAA_CHANNEL_ID }}
         run: |
           python -m src.main run-once
+
+      - name: Save SQLite Database Cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data
+          key: techbot-sqlite-${{ github.run_id }}
