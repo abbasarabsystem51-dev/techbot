@@ -221,6 +221,10 @@ def parse_image_dimensions(data: bytes) -> Optional[Tuple[int, int]]:
 # ImageFinder
 # ---------------------------------------------------------------------------
 
+CHROME_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+
 REJECTED_KEYWORDS: frozenset[str] = frozenset({
     "avatar",
     "favicon",
@@ -247,6 +251,11 @@ class ImageFinder:
 
     def __init__(self, min_width: int = 800) -> None:
         self.min_width = min_width
+        self.headers = {
+            "User-Agent": CHROME_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
 
     def extract_og_image(self, html: str, base_url: str = "") -> Optional[str]:
         """Parse HTML to extract OpenGraph or Twitter card image URL."""
@@ -335,7 +344,11 @@ class ImageFinder:
 
         if not candidate_url and article_url:
             try:
-                page_html = await http_client.get_text(article_url)
+                page_html = await http_client.get_text(
+                    article_url,
+                    headers=self.headers,
+                    timeout=10.0,
+                )
                 candidate_url = self.extract_og_image(page_html, base_url=article_url)
             except Exception as exc:
                 logger.debug("Failed to fetch HTML for og:image from %s: %s", article_url, exc)
@@ -348,8 +361,12 @@ class ImageFinder:
 
         # Verify dimensions by downloading image
         try:
-            image_bytes = await http_client.get_bytes(candidate_url)
-            if self.validate_image_dimensions(image_bytes):
+            image_bytes = await http_client.get_bytes(
+                candidate_url,
+                headers=self.headers,
+                timeout=10.0,
+            )
+            if image_bytes and self.validate_image_dimensions(image_bytes):
                 return candidate_url
         except Exception as exc:
             logger.debug("Failed to validate image %s: %s", candidate_url, exc)
@@ -372,31 +389,44 @@ class LessonCardGenerator:
     def _resolve_font(self, custom_path: Optional[Path | str] = None) -> Optional[str]:
         """Find the best available Persian/Arabic TrueType font."""
         if custom_path and Path(custom_path).exists():
-            return str(custom_path)
+            return str(Path(custom_path).resolve())
 
         root = Path(__file__).resolve().parents[2]
         candidates = [
             root / "fonts" / "Vazirmatn-Bold.ttf",
             root / "fonts" / "Vazirmatn-Regular.ttf",
+            root / "fonts" / "Vazirmatn.ttf",
+            Path("C:/Windows/Fonts/tahomabd.ttf"),
             Path("C:/Windows/Fonts/tahoma.ttf"),
-            Path("C:/Windows/Fonts/segoeui.ttf"),
+            Path("C:/Windows/Fonts/arialbd.ttf"),
             Path("C:/Windows/Fonts/arial.ttf"),
+            Path("C:/Windows/Fonts/segoeuib.ttf"),
+            Path("C:/Windows/Fonts/segoeui.ttf"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
         ]
 
         for p in candidates:
             if p.exists():
-                return str(p)
+                return str(p.resolve())
 
         return None
 
     def _load_font(self, size: int) -> Any:
-        """Load ImageFont at specific size or return default."""
-        if ImageFont is not None and self.font_path:
-            try:
-                return ImageFont.truetype(self.font_path, size=size)
-            except Exception:
-                pass
+        """Load ImageFont at specific size or return robust fallback."""
         if ImageFont is not None:
+            if self.font_path:
+                try:
+                    return ImageFont.truetype(self.font_path, size=size)
+                except Exception as exc:
+                    logger.debug("Failed loading font from path '%s': %s", self.font_path, exc)
+
+            for fallback_name in ("tahomabd.ttf", "tahoma.ttf", "arialbd.ttf", "arial.ttf"):
+                try:
+                    return ImageFont.truetype(fallback_name, size=size)
+                except Exception:
+                    continue
+
             return ImageFont.load_default()
         return None
 
@@ -415,43 +445,44 @@ class LessonCardGenerator:
 
         # Pillow rendering path
         if Image is not None and ImageDraw is not None:
-            # 1. Dark canvas with deep navy background
-            img = Image.new("RGB", (width, height), color=(13, 17, 23))
+            # 1. Dark canvas with deep navy slate background
+            img = Image.new("RGB", (width, height), color=(11, 15, 25))
             draw = ImageDraw.Draw(img)
 
             # 2. Draw card container with rounded border
             margin = 40
             card_box = [margin, margin, width - margin, height - margin]
-            draw.rounded_rectangle(card_box, radius=24, fill=(22, 27, 34), outline=(48, 54, 61), width=2)
+            draw.rounded_rectangle(card_box, radius=24, fill=(15, 23, 42), outline=(30, 41, 59), width=2)
 
-            # 3. Decorative glowing top accent bar
+            # 3. Decorative glowing top accent bar (#38BDF8)
             accent_bar = [margin + 20, margin + 2, width - margin - 20, margin + 8]
-            draw.rounded_rectangle(accent_bar, radius=4, fill=(35, 134, 54))
+            draw.rounded_rectangle(accent_bar, radius=4, fill=(56, 189, 248))
 
-            # 4. Badge: 'درس N از ۳۰'
+            # 4. Badge: 'درس N از ۳۰' in #38BDF8
             badge_font = self._load_font(28)
             badge_shaped = shape_persian_text(badge_text)
 
-            badge_w, badge_h = 240, 56
+            badge_w, badge_h = 260, 56
             badge_x = (width - badge_w) // 2
             badge_y = margin + 50
             draw.rounded_rectangle(
                 [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
                 radius=14,
-                fill=(33, 38, 45),
-                outline=(35, 134, 54),
+                fill=(22, 30, 49),
+                outline=(56, 189, 248),
                 width=2,
             )
             draw.text(
                 (width // 2, badge_y + badge_h // 2),
                 badge_shaped,
-                fill=(240, 246, 252),
+                fill=(56, 189, 248),
                 font=badge_font,
                 anchor="mm",
             )
 
-            # 5. Lesson Title
-            title_font = self._load_font(52)
+            # 5. Lesson Title in high-contrast #FFFFFF
+            title_font_size = 44 if len(lesson_title) > 30 else 52
+            title_font = self._load_font(title_font_size)
             title_shaped = shape_persian_text(lesson_title)
             title_y = height // 2 - 30
             draw.text(
@@ -462,24 +493,24 @@ class LessonCardGenerator:
                 anchor="mm",
             )
 
-            # 6. Subtitle: 'دوره ۳۰ روزه تسلط بر هوش مصنوعی'
+            # 6. Subtitle: 'دوره ۳۰ روزه تسلط بر هوش مصنوعی' in #94A3B8
             sub_font = self._load_font(26)
-            sub_text = shape_persian_text("دوره جامع و کاربردی هوش مصنوعی")
+            sub_text = shape_persian_text("دوره ۳۰ روزه تسلط بر هوش مصنوعی")
             draw.text(
                 (width // 2, title_y + 80),
                 sub_text,
-                fill=(139, 148, 158),
+                fill=(148, 163, 184),
                 font=sub_font,
                 anchor="mm",
             )
 
-            # 7. Bottom Branding: Channel handle and Name
-            brand_font = self._load_font(28)
+            # 7. Bottom Branding: Channel handle (#94A3B8) and Name (#38BDF8)
+            brand_font = self._load_font(26)
             brand_text = shape_persian_text("تک‌نیوز")
-            footer_y = height - margin - 50
+            footer_y = height - margin - 45
 
-            draw.text((margin + 60, footer_y), channel_handle, fill=(88, 166, 255), font=brand_font, anchor="lm")
-            draw.text((width - margin - 60, footer_y), brand_text, fill=(240, 246, 252), font=brand_font, anchor="rm")
+            draw.text((margin + 50, footer_y), channel_handle, fill=(148, 163, 184), font=brand_font, anchor="lm")
+            draw.text((width - margin - 50, footer_y), brand_text, fill=(56, 189, 248), font=brand_font, anchor="rm")
 
             buf = io.BytesIO()
             img.save(buf, format="PNG")
@@ -497,8 +528,8 @@ class LessonCardGenerator:
             )
 
         ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-        # Scanlines: filter byte 0 followed by RGB pixels (#0D1117 background)
-        row = bytearray([0]) + bytearray([13, 17, 23]) * width
+        # Scanlines: filter byte 0 followed by RGB pixels (#0B0F19 background)
+        row = bytearray([0]) + bytearray([11, 15, 25]) * width
         raw_pixels = bytes(row * height)
         idat = zlib.compress(raw_pixels, level=6)
 

@@ -117,7 +117,7 @@ class Source(ABC):
             url=url.strip(),
             canonical_url=canon_url,
             content_hash=c_hash,
-            summary=strip_html(summary),
+            summary=strip_html(summary)[:8000],
             source_name=self.name,
             category=category or self.category,
             basket=basket or self.basket,

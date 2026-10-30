@@ -523,8 +523,20 @@ def test_lesson_card_generator():
 
     assert isinstance(card_bytes, bytes)
     assert len(card_bytes) > 200
+    assert card_bytes.startswith(b"\x89PNG"), "Card output must be valid PNG"
 
-    # If Pillow is available, check PNG signature; else SVG XML
-    is_png = card_bytes.startswith(b"\x89PNG")
-    is_svg = b"<svg" in card_bytes
-    assert is_png or is_svg, "Card output must be valid PNG or SVG bytes"
+    # Verify that image is not blank/solid black and contains high-contrast visible text
+    from PIL import Image
+    import io
+    im = Image.open(io.BytesIO(card_bytes))
+    assert im.size == (1200, 675)
+    colors = {color: count for count, color in im.getcolors(maxcolors=50000)}
+    assert len(colors) > 100, "Image must have rendered text (not blank solid box)"
+    assert colors.get((56, 189, 248), 0) > 500, "Cyan badge/accent color #38BDF8 must be present"
+    assert colors.get((255, 255, 255), 0) > 500, "White title text #FFFFFF must be present"
+    assert colors.get((148, 163, 184), 0) > 200, "Slate subtitle/handle text #94A3B8 must be present"
+
+
+def test_image_finder_chrome_user_agent():
+    finder = ImageFinder()
+    assert "Chrome/122.0.0.0" in finder.headers["User-Agent"]

@@ -284,13 +284,29 @@ class TechBotOrchestrator:
                 # Attempt LLM batch generation if key is present and not running pytest unit tests
                 if self.llm.api_key and not os.environ.get("PYTEST_CURRENT_TEST"):
                     try:
+                        extracted_text = (best_candidate.full_text or best_candidate.summary or "").strip()
+                        if len(extracted_text) > 4000:
+                            extracted_text = extracted_text[:4000]
+
                         prompt = (
-                            f"Generate a developer-cafe Persian post for slot '{slot_id}' (basket: '{basket.value}').\n"
-                            f"Article Title: {best_candidate.title}\n"
-                            f"Article Summary: {best_candidate.summary}\n"
-                            f"Article Content: {best_candidate.full_text[:2000]}\n\n"
-                            f"Respond strictly in JSON matching the GeminiBatchOutput schema:\n"
-                            f'{{"posts": [{{"slot": "{slot_id}", "basket": "{basket.value}", "hook": "⚡️ ...", "intro": "...", '
+                            f"You are writing a Persian post for TechNews Bot (@tech_news_110).\n"
+                            f"Slot: {slot_id} | Basket: {basket.value}\n\n"
+                            f"=== SOURCE ARTICLE CONTEXT (STRICT GROUND TRUTH) ===\n"
+                            f"Original Title: {best_candidate.title}\n"
+                            f"Source: {best_candidate.source_name}\n"
+                            f"URL: {best_candidate.url}\n"
+                            f"Content / Full-text:\n{extracted_text}\n"
+                            f"=== END SOURCE CONTEXT ===\n\n"
+                            f"STRICT RULES:\n"
+                            f"1. Generate 100% natural, fluent conversational developer-cafe Persian content.\n"
+                            f"2. Hook MUST be in Persian under 80 chars, starting with an eye-catching emoji (⚡️, 🔥, 🚀 or 💡) reflecting the exact event. NEVER output English in hook.\n"
+                            f"3. Intro MUST be 1-2 punchy Persian sentences explaining the core news.\n"
+                            f"4. ZERO-HALLUCINATION: The 3 points MUST reflect real specific facts, versions, numbers, or features from the source text above. Never output generic points.\n"
+                            f"5. 'what_can_you_do': Real, tangible practical takeaway in Persian.\n"
+                            f"6. 'analysis': 1 insightful Persian sentence.\n"
+                            f"7. 'try_now': 2-minute actionable practice in Persian.\n"
+                            f"8. Output MUST strictly be valid JSON matching the GeminiBatchOutput schema:\n"
+                            f'{{"posts": [{{"slot": "{slot_id}", "basket": "{basket.value}", "hook": "...", "intro": "...", '
                             f'"points": ["...", "...", "..."], "what_can_you_do": "...", "analysis": "...", "try_now": "...", "terms": ["..."]}}]}}'
                         )
                         batch_res = self.llm.generate_batch(prompt)
@@ -301,17 +317,29 @@ class TechBotOrchestrator:
                     except Exception as llm_err:
                         logger.warning("LLM generation failed for slot %s: %s. Using synthesized fallback.", slot_id, llm_err)
 
-                # Synthesize post item (developer-cafe format fallback)
+                # Synthesize post item (developer-cafe format fallback with 100% natural Persian)
                 if post_item is None:
+                    persian_hook = (
+                        "⚡️ تحول و دستاورد تازه در دنیای هوش مصنوعی"
+                        if basket in (PostBasket.NEWS_AI, PostBasket.NEWS_TECH)
+                        else "🛠 معرفی ابزار کاربردی و هوشمند برای برنامه‌نویسان"
+                    )
+                    persian_intro = (
+                        f"گزارش‌های جدید از سوی {best_candidate.source_name} نشان می‌دهد قابلیت‌های تازه‌ای برای توسعه‌دهندگان رونمایی شده است."
+                    )
+                    clean_terms = [t for t in (best_candidate.title.split()[:3]) if len(t) > 2 and t.isalnum()]
+                    if not clean_terms:
+                        clean_terms = ["AI", "Model", "Open Source"]
+
                     post_item = PostItemSchema(
                         slot=slot_id,
                         basket=basket,
-                        hook=f"⚡️ {best_candidate.title[:75]}",
-                        intro=best_candidate.summary[:150] or "اتفاق مهم و تازه در دنیای هوش مصنوعی منتشر شد.",
+                        hook=persian_hook,
+                        intro=persian_intro,
                         points=[
-                            "افزایش محسوس سرعت و کاهش مصرف حافظه",
-                            "پشتیبانی مستقیم از ابزارهای کدنویسی",
-                            "دسترسی آزاد برای تمام توسعه‌دهندگان",
+                            f"تمرکز بر بهبود عملکرد و تسهیل استفاده در پروژه‌های نرم‌افزاری",
+                            f"انتشار رسمی از طریق {best_candidate.source_name} با هدف دسترسی آسان‌تر تیم‌های فنی",
+                            f"امکان بررسی و پیاده‌سازی سریع بر پایه مستندات و دیتای تازه",
                         ] if basket in (PostBasket.NEWS_AI, PostBasket.NEWS_TECH) else [],
                         what_can_you_do="می‌تونی از این قابلیت جدید در پروژه‌هات برای خودکارسازی کارها استفاده کنی.",
                         steps=[
@@ -320,8 +348,8 @@ class TechBotOrchestrator:
                             "دستور اول را اجرا کن",
                         ] if basket in (PostBasket.TOOL_AI, PostBasket.TOOL_TECH) else [],
                         tip="قبل از شروع به کار، نسخه کتابخانه‌های وابسته را به‌روزرسانی کن.",
-                        try_now="همین الان صفحه پروژه را در مرورگر باز کن و تست کن.",
-                        terms=["API", "Model", "Open Source"],
+                        try_now="همین الان صفحه پروژه را در مرورگر باز کن و قابلیت‌هاش رو بررسی کن.",
+                        terms=clean_terms,
                     )
 
             if post_item:

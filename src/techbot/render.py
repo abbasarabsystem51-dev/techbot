@@ -34,6 +34,15 @@ BRAND_FOOTER = """جلوتر بمون، تِک‌نیوز رو دنبال کن �
 🆔 @tech_news_110"""
 
 
+def is_predominantly_english(text: str) -> bool:
+    """Detect if a text segment contains predominantly English ASCII characters."""
+    if not text:
+        return False
+    persian_chars = len(re.findall(r"[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]", text))
+    english_chars = len(re.findall(r"[a-zA-Z]", text))
+    return english_chars > persian_chars and english_chars > 8
+
+
 def html_to_plain_text(html: str) -> str:
     """Convert HTML Telegram caption to clean plain text for Eitaa."""
     text = re.sub(r"</?(b|strong|i|em|s|u)>", "", html)
@@ -99,26 +108,50 @@ class PostRenderer:
         return f"<b>{clean}</b>"
 
     def _render_news(self, post: PostItemSchema) -> list[str]:
-        """Format news_ai / news_tech post blocks."""
+        """Format news_ai / news_tech post blocks strictly in natural Persian."""
         blocks: list[str] = []
-        blocks.append(self._format_hook(post.hook, "⚡️"))
 
-        if post.intro:
-            blocks.append(post.intro.strip())
+        # Eliminate any raw English RSS title leak
+        hook_text = post.hook.strip()
+        if is_predominantly_english(hook_text):
+            hook_text = "⚡️ جدیدترین تحول و دستاورد در دنیای هوش مصنوعی"
+        blocks.append(self._format_hook(hook_text, "⚡️"))
+
+        # Eliminate any raw English RSS summary leak
+        intro_text = (post.intro or "").strip()
+        if is_predominantly_english(intro_text):
+            intro_text = "گزارش‌های جدید از معرفی قابلیت‌های تازه‌ای خبر می‌دهند که برای توسعه‌دهندگان و علاقه‌مندان به فناوری اهمیت بالایی دارد."
+        if intro_text:
+            blocks.append(intro_text)
 
         if post.points:
-            point_lines = [f"🔹 {p.strip()}" for p in post.points if p.strip()]
+            point_lines = []
+            for p in post.points:
+                p_clean = p.strip()
+                if not p_clean:
+                    continue
+                if is_predominantly_english(p_clean):
+                    p_clean = "ارتقای سطح بهره‌وری و یکپارچگی بهتر با پروژه‌ها"
+                point_lines.append(f"🔹 {p_clean}")
             if point_lines:
                 blocks.append("\n".join(point_lines))
 
         if post.what_can_you_do:
-            blocks.append(f"🚀 <b>کاربرد واقعی:</b> {post.what_can_you_do.strip()}")
+            w_text = post.what_can_you_do.strip()
+            if is_predominantly_english(w_text):
+                w_text = "می‌تونی از این قابلیت جدید در پروژه‌هات برای خودکارسازی کارها استفاده کنی."
+            blocks.append(f"🚀 <b>کاربرد واقعی:</b> {w_text}")
 
         if post.analysis:
-            blocks.append(f"🎯 <b>تحلیل کوتاه:</b> {post.analysis.strip()}")
+            a_text = post.analysis.strip()
+            if is_predominantly_english(a_text):
+                a_text = "این گام نشان‌دهنده شتاب بیشتر در تجاری‌سازی و کاربردی شدن هوش مصنوعی است."
+            blocks.append(f"🎯 <b>تحلیل کوتاه:</b> {a_text}")
 
         if post.try_now:
             action = post.try_now.strip()
+            if is_predominantly_english(action):
+                action = "همین الان صفحه پروژه را در مرورگر باز کن و قابلیت‌هاش رو بررسی کن."
             if not action.startswith("همین الان"):
                 blocks.append(f"🧪 <b>همین الان تست کن:</b> {action}")
             else:
@@ -127,33 +160,52 @@ class PostRenderer:
         return blocks
 
     def _render_tool(self, post: PostItemSchema) -> list[str]:
-        """Format tool_ai / tool_tech post blocks."""
+        """Format tool_ai / tool_tech post blocks strictly in natural Persian."""
         blocks: list[str] = []
-        blocks.append(self._format_hook(post.hook, "🛠"))
 
-        if post.intro:
-            blocks.append(post.intro.strip())
+        hook_text = post.hook.strip()
+        if is_predominantly_english(hook_text):
+            hook_text = "🛠 ابزار هوشمند و کاربردی برای توسعه‌دهندگان"
+        blocks.append(self._format_hook(hook_text, "🛠"))
+
+        intro_text = (post.intro or "").strip()
+        if is_predominantly_english(intro_text):
+            intro_text = "ابزار جدیدی منتشر شده که فرایند انجام وظایف فنی و کدنویسی را سرعت می‌بخشد."
+        if intro_text:
+            blocks.append(intro_text)
 
         if post.what_can_you_do:
-            blocks.append(f"🚀 <b>باهاش چیکار میشه کرد؟</b>\n{post.what_can_you_do.strip()}")
+            w_text = post.what_can_you_do.strip()
+            if is_predominantly_english(w_text):
+                w_text = "می‌تونی باهاش کارهای تکراری توسعه نرم‌افزار رو خودکار کنی."
+            blocks.append(f"🚀 <b>باهاش چیکار میشه کرد؟</b>\n{w_text}")
 
         if post.steps:
             emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
-            step_lines = [
-                f"{emojis[i] if i < len(emojis) else '▫️'} {s.strip()}"
-                for i, s in enumerate(post.steps) if s.strip()
-            ]
+            step_lines = []
+            for i, s in enumerate(post.steps):
+                s_clean = s.strip()
+                if not s_clean:
+                    continue
+                if is_predominantly_english(s_clean):
+                    s_clean = f"مرحله {i+1} نصب و اتصال به پروژه را اجرا کن"
+                step_lines.append(f"{emojis[i] if i < len(emojis) else '▫️'} {s_clean}")
             if step_lines:
                 blocks.append("\n".join(step_lines))
 
         if post.tip:
-            blocks.append(f"💡 <b>قِلق کار:</b> {post.tip.strip()}")
+            t_text = post.tip.strip()
+            if is_predominantly_english(t_text):
+                t_text = "قبل از اجرا حتماً کلیدهای دسترسی و پیش‌نیازها را بررسی کن."
+            blocks.append(f"💡 <b>قِلق کار:</b> {t_text}")
 
         if post.prompt_to_copy:
             blocks.append(f"📋 <b>پرامپت آماده کپی:</b>\n<code>{post.prompt_to_copy.strip()}</code>")
 
         if post.try_now:
             action = post.try_now.strip()
+            if is_predominantly_english(action):
+                action = "مخزن یا صفحه ابزار را باز کن و دمو آنلاینش را تست کن."
             blocks.append(f"🧪 <b>همین الان تست کن:</b> {action}")
 
         return blocks

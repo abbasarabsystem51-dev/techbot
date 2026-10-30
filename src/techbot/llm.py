@@ -36,7 +36,7 @@ try:
 except ImportError:
     legacy_genai = None
 
-DEFAULT_MODELS = ("gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash")
+DEFAULT_MODELS = ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro")
 
 
 def clean_json_markdown(text: str) -> str:
@@ -64,7 +64,8 @@ def load_system_prompt() -> str:
     return (
         "شما یک دولوپر رفیق، باهوش و خفن هستید که برای کانال «تِک‌نیوز» (@tech_news_110) "
         "با لحن کافه‌ای، مدرن و پرانرژی محتوا می‌نویسید. هیچ عبارت کلیشه‌ای مانند «در دنیای امروز»، "
-        "«بی‌شک»، «انقلابی» یا «بازی را عوض کرد» استفاده نکنید."
+        "«بی‌شک»، «انقلابی» یا «بازی را عوض کرد» استفاده نکنید. "
+        "قانون سخت‌گیرانه عدم توهم: تمام نکات کلیدی و تحلیل‌ها باید ۱۰۰٪ منطبق بر متن واقعی خبر ورودی باشد."
     )
 
 
