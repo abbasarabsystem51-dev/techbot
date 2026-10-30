@@ -4,17 +4,20 @@ src/techbot/llm.py — LLM Client for Gemini API batch generation.
 Features:
   1. Supports official `google-genai` SDK (`from google import genai`) with fallback to `google.generativeai`.
   2. Reads API key from `GEMINI_KEY` or `GEMINI_API_KEY` environment variables.
-  3. Single batch call per scheduled run returning `GeminiBatchOutput`.
-  4. Model fallback list from config (e.g. gemini-2.5-flash -> gemini-1.5-pro).
-  5. Exponential backoff and retry on transient errors.
-  6. Enforces 'developer-cafe' conversational Persian tone via system prompt.
+  3. Configurable model via `GEMINI_MODEL` (default: gemini-2.5-flash).
+  4. Exactly 30 seconds timeout per attempt (LLM_TIMEOUT_SECONDS = 30).
+  5. Retry max 3 attempts with exponential backoff (2s, 4s + jitter).
+  6. Retry ONLY on timeout, 429, 500, 502, 503, 504, and connection errors; never retry 400/401/403.
+  7. Clear Persian error logging with stage [۳/۵].
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import random
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -22,6 +25,28 @@ from typing import Any, Optional, Sequence
 from src.models import GeminiBatchOutput, PostItemSchema
 
 logger = logging.getLogger(__name__)
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+def safe_print(text: str) -> None:
+    """Print text safely with utf-8 encoding fallback."""
+    try:
+        print(text, flush=True)
+    except Exception:
+        try:
+            sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+LLM_TIMEOUT_SECONDS = 30
+DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+DEFAULT_MODELS = (DEFAULT_GEMINI_MODEL, "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro")
 
 # Try importing the new google-genai SDK first, then legacy google-generativeai
 try:
@@ -36,7 +61,38 @@ try:
 except ImportError:
     legacy_genai = None
 
-DEFAULT_MODELS = ("gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro")
+
+def is_retryable_llm_error(exc: Exception) -> bool:
+    """
+    Determine if an LLM error is transient and should be retried.
+    Retry ONLY on timeout, 429, 500, 502, 503, 504, and connection errors.
+    Never retry on 400/401/403.
+    """
+    status_code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status_code in (400, 401, 403):
+        return False
+
+    err_str = str(exc).lower()
+
+    # Never retry on 400, 401, 403 or permission / auth / invalid argument
+    if any(k in err_str for k in ("400", "401", "403", "invalid argument", "invalid_argument", "permission_denied", "unauthenticated")):
+        return False
+
+    # Retry on timeout, 429, 500, 502, 503, 504, connection errors
+    if any(k in err_str for k in ("504", "deadline exceeded", "timeout", "timed out", "429", "resource_exhausted", "500", "502", "503", "unavailable", "internal")):
+        return True
+
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+
+    try:
+        import httpx
+        if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
+            return True
+    except ImportError:
+        pass
+
+    return False
 
 
 def clean_json_markdown(text: str) -> str:
@@ -71,16 +127,16 @@ def load_system_prompt() -> str:
 
 class GeminiClient:
     """
-    Robust Gemini API batch generation client.
+    Robust Gemini API batch generation client with 30s timeout and exponential backoff retry.
     """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        models: Sequence[str] = DEFAULT_MODELS,
+        models: Optional[Sequence[str]] = None,
         temperature: float = 0.3,
         system_prompt: Optional[str] = None,
-        timeout: float = 45.0,
+        timeout: float = LLM_TIMEOUT_SECONDS,
         max_retries: int = 2,
     ) -> None:
         self.api_key = (
@@ -89,11 +145,16 @@ class GeminiClient:
             or os.environ.get("GEMINI_API_KEY")
             or ""
         )
-        self.models = list(models) if models else list(DEFAULT_MODELS)
+        primary_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        if models:
+            self.models = list(models)
+        else:
+            self.models = [primary_model] + [m for m in DEFAULT_MODELS if m != primary_model]
+
         self.temperature = temperature
         self.system_prompt = system_prompt or load_system_prompt()
-        self.timeout = timeout
-        self.max_retries = max_retries
+        self.timeout = LLM_TIMEOUT_SECONDS
+        self.max_attempts = 3  # exactly 3 attempts max
 
         self._client: Any = None
         self._init_sdk()
@@ -106,7 +167,12 @@ class GeminiClient:
 
         if genai is not None:
             try:
-                self._client = genai.Client(api_key=self.api_key)
+                http_opts = (
+                    genai_types.HttpOptions(timeout=LLM_TIMEOUT_SECONDS * 1000)
+                    if genai_types is not None
+                    else None
+                )
+                self._client = genai.Client(api_key=self.api_key, http_options=http_opts)
                 return
             except Exception as exc:
                 logger.debug("Failed to init google-genai Client: %s", exc)
@@ -120,43 +186,63 @@ class GeminiClient:
 
     def generate_batch(self, prompt: str) -> GeminiBatchOutput:
         """
-        Execute a single batch request to Gemini returning a validated GeminiBatchOutput.
-        Automatically handles model fallback and retry on errors.
+        Execute a batch request to Gemini returning a validated GeminiBatchOutput.
+        Retries max 3 attempts with exponential backoff (2s, 4s + jitter).
+        Retries ONLY on timeout, 429, 500, 502, 503, 504, and connection errors.
+        Never retries 400/401/403.
+        On final failure, prints a clear Persian error and raises RuntimeError.
+        If JSON parsing fails, returns empty GeminiBatchOutput(posts=[]) to allow fallback.
         """
         if not self.api_key:
             raise ValueError("Gemini API key is missing. Set GEMINI_KEY or GEMINI_API_KEY.")
 
+        model_name = self.models[0]
         last_error: Optional[Exception] = None
 
-        for model_name in self.models:
-            for attempt in range(self.max_retries + 1):
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                logger.info("Calling Gemini (%s, attempt %d/%d)...", model_name, attempt, self.max_attempts)
+                raw_text = self._call_model(model_name, prompt)
+                cleaned_json = clean_json_markdown(raw_text)
+
                 try:
-                    logger.info("Calling Gemini (%s, attempt %d/%d)...", model_name, attempt + 1, self.max_retries + 1)
-                    raw_text = self._call_model(model_name, prompt)
-                    cleaned_json = clean_json_markdown(raw_text)
+                    data = json.loads(cleaned_json)
+                    return GeminiBatchOutput.model_validate(data)
+                except Exception as parse_err:
+                    logger.warning("Failed to parse Gemini output as JSON (attempt %d): %s", attempt, parse_err)
+                    # Unparsable JSON should not retry network; return empty to trigger candidate #1 fallback
+                    return GeminiBatchOutput(posts=[])
 
-                    # Validate output strictly with Pydantic
-                    return GeminiBatchOutput.model_validate_json(cleaned_json)
+            except Exception as exc:
+                last_error = exc
+                if not is_retryable_llm_error(exc):
+                    logger.error("Non-retryable Gemini error (%s): %s", model_name, exc)
+                    safe_print(
+                        f"❌ [۳/۵] خطای غیرقابل تکرار در برقراری ارتباط با مدل هوش مصنوعی Gemini: {exc}"
+                    )
+                    raise RuntimeError(f"Non-retryable Gemini error: {exc}") from exc
 
-                except Exception as exc:
-                    last_error = exc
-                    logger.warning("Gemini model '%s' failed on attempt %d: %s", model_name, attempt + 1, exc)
-                    if attempt < self.max_retries:
-                        time.sleep(2.0 * (attempt + 1))
-                    else:
-                        logger.info("Falling back from model '%s' to next model...", model_name)
-                        break
+                logger.warning("Gemini model '%s' failed on attempt %d/%d: %s", model_name, attempt, self.max_attempts, exc)
+                if attempt < self.max_attempts:
+                    backoff = (2.0 ** attempt) + random.uniform(0.05, 0.25)
+                    time.sleep(backoff)
 
-        raise RuntimeError(f"All Gemini models failed. Last error: {last_error}") from last_error
+        # Final failure after 3 attempts
+        safe_print(
+            f"❌ [۳/۵] خطا: تلاش‌های اتصال به مدل هوش مصنوعی Gemini پس از ۳ بار تکرار ناموفق بود. آخرین خطا: {last_error}"
+        )
+        raise RuntimeError(f"All {self.max_attempts} Gemini attempts failed. Last error: {last_error}")
 
     def _call_model(self, model_name: str, prompt: str) -> str:
-        """Direct call to model using either new or legacy SDK."""
+        """Direct call to model using either new or legacy SDK with 30-second timeout."""
         # 1. New google-genai SDK
         if genai is not None and hasattr(self._client, "models"):
             config: dict[str, Any] = {
                 "temperature": self.temperature,
                 "response_mime_type": "application/json",
             }
+            if genai_types is not None:
+                config["http_options"] = genai_types.HttpOptions(timeout=LLM_TIMEOUT_SECONDS * 1000)
             if self.system_prompt:
                 config["system_instruction"] = self.system_prompt
 
@@ -179,7 +265,10 @@ class GeminiClient:
                 kwargs["system_instruction"] = self.system_prompt
 
             model = legacy_genai.GenerativeModel(model_name, **kwargs)
-            response = model.generate_content(prompt)
+            response = model.generate_content(
+                prompt,
+                request_options={"timeout": LLM_TIMEOUT_SECONDS},
+            )
             return response.text or ""
 
         raise RuntimeError("No Google GenAI SDK is available in the Python environment.")

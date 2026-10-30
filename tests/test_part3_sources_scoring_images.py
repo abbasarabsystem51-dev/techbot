@@ -17,10 +17,10 @@ from src.models import Item, PostBasket, PostCategory
 from src.techbot.healthcheck import check_source_health
 from src.techbot.http import HttpClient, create_http_client
 from src.techbot.images import (
-    ImageFinder,
-    LessonCardGenerator,
-    parse_image_dimensions,
-    shape_persian_text,
+    CHROME_USER_AGENT,
+    extract_meta_image,
+    get_image_url,
+    validate_image_url,
 )
 from src.techbot.scoring import (
     Scorer,
@@ -461,17 +461,10 @@ def test_rank_candidates():
 
 
 # ===========================================================================
-# 4. Images & Graphic Cards Tests
+# 4. Images URL Resolution Tests
 # ===========================================================================
 
-def test_image_dimensions_binary_parser():
-    png_bytes = create_mock_png_bytes(1200, 675)
-    dims = parse_image_dimensions(png_bytes)
-    assert dims == (1200, 675)
-
-
-def test_image_finder_og_extraction_and_filtering():
-    finder = ImageFinder(min_width=800)
+def test_extract_meta_image():
     html = """
     <html>
       <head>
@@ -479,64 +472,16 @@ def test_image_finder_og_extraction_and_filtering():
       </head>
     </html>
     """
-    og_url = finder.extract_og_image(html, base_url="https://example.com")
+    og_url = extract_meta_image(html, base_url="https://example.com")
     assert og_url == "https://example.com/images/hero-article.jpg"
 
-    # Rejection of icons / logos / avatars
-    assert finder.is_valid_image_url("https://example.com/hero.jpg") is True
-    assert finder.is_valid_image_url("https://example.com/site_logo.png") is False
-    assert finder.is_valid_image_url("https://example.com/user_avatar.jpg") is False
-    assert finder.is_valid_image_url("https://example.com/icon.svg") is False
+
+def test_validate_image_url_rejects_icons():
+    assert validate_image_url("https://example.com/site_logo.png") is False
+    assert validate_image_url("https://example.com/favicon.ico") is False
+    assert validate_image_url("https://example.com/user_avatar.jpg") is False
+    assert validate_image_url("http://example.com/insecure.jpg") is False
 
 
-def test_image_finder_dimension_validation():
-    finder = ImageFinder(min_width=800)
-
-    # 1200x675 HD image passes
-    valid_bytes = create_mock_png_bytes(1200, 675)
-    assert finder.validate_image_dimensions(valid_bytes) is True
-
-    # 400x300 image fails (too small)
-    small_bytes = create_mock_png_bytes(400, 300)
-    assert finder.validate_image_dimensions(small_bytes) is False
-
-    # 500x500 square avatar fails
-    square_bytes = create_mock_png_bytes(500, 500)
-    assert finder.validate_image_dimensions(square_bytes) is False
-
-
-def test_persian_text_shaping():
-    raw_text = "درس ۱ از ۳۰"
-    shaped = shape_persian_text(raw_text)
-    assert shaped != ""
-    assert len(shaped) > 0
-
-
-def test_lesson_card_generator():
-    gen = LessonCardGenerator()
-    card_bytes = gen.generate_card(
-        lesson_number=5,
-        lesson_title="مفاهیم پردازش تصویر و بینایی ماشین",
-        total_lessons=30,
-        channel_handle="@tech_news_110",
-    )
-
-    assert isinstance(card_bytes, bytes)
-    assert len(card_bytes) > 200
-    assert card_bytes.startswith(b"\x89PNG"), "Card output must be valid PNG"
-
-    # Verify that image is not blank/solid black and contains high-contrast visible text
-    from PIL import Image
-    import io
-    im = Image.open(io.BytesIO(card_bytes))
-    assert im.size == (1200, 675)
-    colors = {color: count for count, color in im.getcolors(maxcolors=50000)}
-    assert len(colors) > 100, "Image must have rendered text (not blank solid box)"
-    assert colors.get((56, 189, 248), 0) > 500, "Cyan badge/accent color #38BDF8 must be present"
-    assert colors.get((255, 255, 255), 0) > 500, "White title text #FFFFFF must be present"
-    assert colors.get((148, 163, 184), 0) > 200, "Slate subtitle/handle text #94A3B8 must be present"
-
-
-def test_image_finder_chrome_user_agent():
-    finder = ImageFinder()
-    assert "Chrome/122.0.0.0" in finder.headers["User-Agent"]
+def test_chrome_user_agent():
+    assert "Chrome/122.0.0.0" in CHROME_USER_AGENT

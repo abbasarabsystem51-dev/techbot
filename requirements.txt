@@ -4,6 +4,7 @@ pydantic>=2.9.0
 pydantic-settings>=2.6.0
 
 # HTTP & RSS
+requests>=2.31.0
 httpx>=0.27.0
 feedparser>=6.0.11
 beautifulsoup4>=4.12.3
@@ -25,8 +26,7 @@ tenacity>=9.0.0
 # Hashing / utilities
 python-dotenv>=1.0.1
 
-# Image & Persian Typography
-Pillow>=10.0.0
+# Persian Typography
 arabic-reshaper>=3.0.0
 python-bidi>=0.4.2
 

@@ -3,7 +3,7 @@ src/techbot/main.py — Master Orchestration Pipeline for TechNews Bot (@tech_ne
 
 Usage:
   python -m techbot.main --run-index 1 --dry-run
-  python -m src.techbot.main --run-index 2
+  python main.py --run-index 1
 """
 from __future__ import annotations
 
@@ -12,15 +12,18 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import yaml
 from zoneinfo import ZoneInfo
 
-# Ensure both project root and src/ are in sys.path regardless of how invoked
+# Ensure both project root and src/ are in sys.path
 _CURRENT_DIR = Path(__file__).resolve().parent
 _SRC_DIR = _CURRENT_DIR.parent
 _ROOT_DIR = _SRC_DIR.parent
@@ -45,23 +48,25 @@ from src.models import (
 from src.techbot.facts_check import verify_post_item
 from src.techbot.healthcheck import load_configured_sources
 from src.techbot.http import create_http_client
-from src.techbot.images import ImageFinder, LessonCardGenerator, validate_rendered_image
+from src.techbot.images import FALLBACK_IMAGE_URL, get_image_url
 from src.techbot.inbox import InboxManager
-from src.techbot.llm import GeminiClient
+from src.techbot.llm import LLM_TIMEOUT_SECONDS, GeminiClient
 from src.techbot.render import PostRenderer
 from src.techbot.review import QualityReviewer
-from src.techbot.scoring import Scorer
+from src.techbot.scoring import normalize_url
 from src.techbot.senders.eitaa import EitaaSender
 from src.techbot.senders.telegram import TelegramSender
-from src.techbot.sources.fulltext import enrich_top_candidates
 from src.techbot.state.atomic import StateManager
 from src.techbot.weekly import WeeklyContentBuilder
+from src.utils import strip_html
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("techbot.main")
+
+MAX_CANDIDATES = 10
 
 
 def get_tehran_date() -> str:
@@ -73,16 +78,198 @@ def get_tehran_date() -> str:
     return datetime.now(tz).strftime("%Y-%m-%d")
 
 
-def safe_print(text: str) -> None:
-    """Print text safely across different OS consoles without crashing on cp1252."""
+if hasattr(sys.stdout, "reconfigure"):
     try:
-        print(text)
-    except UnicodeEncodeError:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+def safe_print(text: str) -> None:
+    """Print text safely across consoles with explicit flush."""
+    try:
+        print(text, flush=True)
+    except Exception:
         try:
             sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
             sys.stdout.flush()
         except Exception:
             pass
+
+
+def normalize_title_for_dedup(title: str) -> str:
+    """Produce clean normalized string for title deduplication."""
+    if not title:
+        return ""
+    clean = re.sub(r"[^\w\s]", "", title.lower())
+    return " ".join(clean.split())
+
+
+def reduce_candidates(
+    items: list[Item],
+    sent_links: Optional[set[str]] = None,
+    recent_titles: Optional[list[str]] = None,
+    max_candidates: int = MAX_CANDIDATES,
+    now: Optional[datetime] = None,
+) -> list[Item]:
+    """
+    Candidate reduction pipeline:
+    a. Deduplicate by normalized URL and normalized title.
+    b. Drop items older than 48h (keep undated items only if fewer than 10 would remain otherwise).
+    c. Drop items already posted, if a state store exists.
+    d. Score: keyword relevance + recency boost - source-diversity penalty (max 3 items per source).
+    e. Sort by score descending, slice [:MAX_CANDIDATES], with MAX_CANDIDATES = 10.
+    """
+    if not items:
+        return []
+
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+
+    # a. Deduplicate by normalized URL and normalized title
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+    deduped: list[Item] = []
+
+    for item in items:
+        raw_url = item.url or item.canonical_url or ""
+        norm_url = normalize_url(raw_url)
+        norm_title = normalize_title_for_dedup(item.title)
+
+        if norm_url and norm_url in seen_urls:
+            continue
+        if norm_title and norm_title in seen_titles:
+            continue
+
+        if norm_url:
+            seen_urls.add(norm_url)
+        if norm_title:
+            seen_titles.add(norm_title)
+        deduped.append(item)
+
+    # b. Drop items older than 48h (keep undated items only if fewer than 10 would remain otherwise)
+    cutoff = current_time - timedelta(hours=48)
+    dated_recent: list[Item] = []
+    undated: list[Item] = []
+
+    for item in deduped:
+        if item.published_at:
+            pub = item.published_at
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=timezone.utc)
+            if pub >= cutoff:
+                dated_recent.append(item)
+            # Items older than 48h are dropped
+        else:
+            undated.append(item)
+
+    if len(dated_recent) >= max_candidates:
+        age_filtered = dated_recent
+    else:
+        age_filtered = dated_recent + undated
+
+    # c. Drop items already posted
+    sent = sent_links or set()
+    recent_set = {normalize_title_for_dedup(t) for t in (recent_titles or []) if t}
+    unposted: list[Item] = []
+
+    for item in age_filtered:
+        raw_u = item.url or ""
+        norm_u = normalize_url(raw_u)
+        canon_u = normalize_url(item.canonical_url or "")
+
+        if (norm_u and norm_u in sent) or (canon_u and canon_u in sent) or (raw_u and raw_u in sent):
+            continue
+
+        norm_t = normalize_title_for_dedup(item.title)
+        if norm_t and norm_t in recent_set:
+            continue
+
+        unposted.append(item)
+
+    # d. Score: keyword relevance + recency boost - source diversity (max 3 items per source)
+    keywords = [
+        "ai", "llm", "openai", "google", "apple", "nvidia", "microsoft",
+        "chips", "security", "startup", "robotics", "open-source", "open source",
+        "deepmind", "anthropic", "meta", "gpt", "agent", "agents", "machine learning",
+    ]
+
+    scored_items: list[tuple[float, Item]] = []
+    for item in unposted:
+        text = f"{item.title} {item.summary}".lower()
+        kw_score = 0.0
+        for kw in keywords:
+            if kw in text:
+                kw_score += 1.5
+
+        recency_boost = 0.0
+        if item.published_at:
+            pub = item.published_at if item.published_at.tzinfo else item.published_at.replace(tzinfo=timezone.utc)
+            age_hours = max(0.0, (current_time - pub).total_seconds() / 3600.0)
+            if age_hours < 48:
+                recency_boost = 3.0 * (1.0 - (age_hours / 48.0))
+
+        total_score = kw_score + recency_boost
+        scored_items.append((total_score, item))
+
+    # Sort descending
+    scored_items.sort(key=lambda x: x[0], reverse=True)
+
+    # Source diversity penalty: max 3 items per source
+    source_counts: dict[str, int] = {}
+    selected: list[Item] = []
+    for score, item in scored_items:
+        src = (item.source_name or "unknown").strip().lower()
+        if source_counts.get(src, 0) >= 3:
+            continue
+        source_counts[src] = source_counts.get(src, 0) + 1
+        selected.append(item)
+        if len(selected) >= max_candidates:
+            break
+
+    # e. Slice top MAX_CANDIDATES
+    return selected[:max_candidates]
+
+
+def format_candidate_payload(item: Item) -> dict[str, str]:
+    """
+    Format item for LLM candidate payload:
+    {id, title, source, link, summary}; summary = HTML-stripped, truncated to 300 chars. No article bodies.
+    """
+    clean_summary = strip_html(item.summary or "")
+    clean_summary = " ".join(clean_summary.split())
+    if len(clean_summary) > 300:
+        clean_summary = clean_summary[:297] + "..."
+    return {
+        "id": item.id,
+        "title": item.title,
+        "source": item.source_name,
+        "link": item.url,
+        "summary": clean_summary,
+    }
+
+
+def build_fallback_post(candidate: Item, slot_id: str, basket: PostBasket) -> PostItemSchema:
+    """Build a natural conversational Persian post fallback from candidate #1."""
+    hook_title = candidate.title[:75]
+    terms = [t for t in candidate.title.split() if len(t) > 2 and t.isalnum()][:3] or ["AI", "Tech"]
+
+    return PostItemSchema(
+        slot=slot_id,
+        basket=basket,
+        hook=f"⚡️ {hook_title}",
+        intro=f"بر اساس گزارش‌های منتشر شده از {candidate.source_name}، قابلیت‌ها و جزئیات تازه‌ای در این باره اعلام شد.",
+        points=[
+            "بهبود بهره‌وری و کاهش پیچیدگی پیاده‌سازی برای تیم‌های توسعه",
+            f"ارائه رسمی از طریق پایگاه {candidate.source_name} جهت دسترسی سریع‌تر برنامه‌نویسان",
+            "امکان ارزیابی و استفاده مستقیم بر پایه مستندات اعلام‌شده",
+        ],
+        what_can_you_do="می‌تونی این قابلیت رو در جریان کاری خودت بررسی و تست کنی.",
+        tip="همیشه پیش از ادغام در پروداکشن، تغییرات و پیش‌نیازها را بررسی کن.",
+        try_now="همین الان صفحه پروژه را در مرورگر باز کن و قابلیت‌هاش رو بررسی کن.",
+        terms=terms,
+    )
 
 
 class TechBotOrchestrator:
@@ -107,9 +294,6 @@ class TechBotOrchestrator:
         self.state_manager = StateManager(state_path)
 
         # Core Engines
-        self.scorer = Scorer(self.root_dir / "scoring_weights.json")
-        self.card_generator = LessonCardGenerator()
-        self.image_finder = ImageFinder(min_width=800)
         self.renderer = PostRenderer()
         self.reviewer = QualityReviewer(passing_threshold=70)
         self.inbox_manager = InboxManager(self.state_manager)
@@ -139,19 +323,12 @@ class TechBotOrchestrator:
         target_date: Optional[str] = None,
     ) -> bool:
         """
-        Execute a scheduled daily run (1 through 5).
+        Execute a scheduled daily run (1 through 5) following the 5 Persian stage logs.
         """
         date_str = target_date or get_tehran_date()
         logger.info("Starting Run %d for date %s (dry_run=%s)", run_index, date_str, dry_run)
 
-        # 🔄 [۱/۵] شروع اجرای ربات و بررسی کلیدهای دسترسی (API Keys)...
-        safe_print("🔄 [۱/۵] شروع اجرای ربات و بررسی کلیدهای دسترسی (API Keys)...")
-        has_gemini = bool(self.llm.api_key)
-        has_telegram = bool(os.environ.get("TELEGRAM_BOT_TOKEN") and (os.environ.get("TELEGRAM_CHANNEL_ID") or os.environ.get("TELEGRAM_CHAT_ID")))
-        has_eitaa = bool((os.environ.get("EITAA_BOT_TOKEN") or os.environ.get("EITAA_API_KEY")) and os.environ.get("EITAA_CHANNEL_ID"))
-        safe_print(f"   🔑 وضعیت کلیدها: Gemini={'✅ فعال' if has_gemini else '❌ غیرفعال'} | Telegram={'✅ فعال' if has_telegram else '❌ غیرفعال'} | Eitaa={'✅ فعال' if has_eitaa else '❌ غیرفعال'}")
-
-        # 1. Locate Run Configuration
+        # Locate Run Configuration
         runs = self.config.get("run_plan", {}).get("runs", [])
         selected_run = next((r for r in runs if r.get("run_index") == run_index), None)
         if not selected_run:
@@ -159,9 +336,8 @@ class TechBotOrchestrator:
             return False
 
         slots = selected_run.get("slots", [])
-        logger.info("Run %d label: '%s' (%d slots)", run_index, selected_run.get("label", ""), len(slots))
 
-        # 2. Check Idempotency for each slot
+        # Check Idempotency for slots
         slots_to_process = []
         for slot in slots:
             slot_id = slot.get("slot_id")
@@ -173,36 +349,60 @@ class TechBotOrchestrator:
 
         if not slots_to_process:
             logger.info("All slots for Run %d on %s are already completed. Exiting.", run_index, date_str)
-            safe_print("✅ [۵/۵] اجرای ربات با موفقیت به پایان رسید!")
             return True
 
-        # 3. Fetch candidates from all sources
-        logger.info("Collecting candidate articles and tools from sources...")
-        sources = load_configured_sources(self.root_dir / "config.yaml")
-        fetch_cfg = self.config.get("fetching", {})
-        timeout_sec = float(fetch_cfg.get("timeout_seconds", 10.0))
-        http_client = create_http_client(timeout=timeout_sec, max_retries=1)
-
         raw_state = self.state_manager.get_state()
-        all_candidates: list[Item] = []
-
-        fetch_tasks = [s.safe_fetch(client=http_client, state=raw_state) for s in sources]
-        fetch_results = await asyncio.gather(*fetch_tasks)
-        for batch in fetch_results:
-            all_candidates.extend(batch)
-
-        logger.info("Collected %d total candidate items.", len(all_candidates))
-
-        # 4. Prepare slot contexts and build single structured prompt for Gemini
         sent_links = self.state_manager.get_sent_links()
         recent_titles = self.state_manager.get_recent_titles()
 
+        # =======================================================================
+        # [۱/۵] دریافت خبرها از فیدها...
+        # =======================================================================
+        t_stage1_start = time.monotonic()
+        all_candidates: list[Item] = []
+        try:
+            sources = load_configured_sources(self.root_dir / "config.yaml")
+            fetch_cfg = self.config.get("fetching", {})
+            timeout_sec = float(fetch_cfg.get("timeout_seconds", 10.0))
+            http_client = create_http_client(timeout=timeout_sec, max_retries=1)
+
+            fetch_tasks = [s.safe_fetch(client=http_client, state=raw_state) for s in sources]
+            fetch_results = await asyncio.gather(*fetch_tasks)
+            for batch in fetch_results:
+                all_candidates.extend(batch)
+            await http_client.aclose()
+        except Exception as exc:
+            safe_print(f"❌ [۱/۵] خطا در دریافت خبرها از فیدها: {exc}")
+            logger.error("Stage 1 fetch error: %s", exc)
+
+        t_stage1_elapsed = time.monotonic() - t_stage1_start
+        safe_print(f"[۱/۵] دریافت خبرها از فیدها... (⏱ {t_stage1_elapsed:.1f}s)")
+
+        # =======================================================================
+        # [۲/۵] فیلتر و انتخاب ۱۰ خبر برتر...
+        # =======================================================================
+        t_stage2_start = time.monotonic()
+        top_candidates = reduce_candidates(
+            all_candidates,
+            sent_links=sent_links,
+            recent_titles=recent_titles,
+            max_candidates=MAX_CANDIDATES,
+        )
+        t_stage2_elapsed = time.monotonic() - t_stage2_start
+        safe_print(f"[۲/۵] فیلتر و انتخاب ۱۰ خبر برتر... (⏱ {t_stage2_elapsed:.1f}s)")
+
+        # =======================================================================
+        # [۳/۵] تحلیل و تولید متن با هوش مصنوعی...
+        # =======================================================================
+        t_stage3_start = time.monotonic()
+        llm_posts: dict[str, PostItemSchema] = {}
         slot_contexts: dict[str, dict[str, Any]] = {}
-        prompt_sections: list[str] = []
+
+        candidate_payloads = [format_candidate_payload(c) for c in top_candidates]
 
         for slot in slots_to_process:
-            basket_str = slot.get("basket", "news_ai")
             slot_id = slot.get("slot_id", f"{run_index}_1")
+            basket_str = slot.get("basket", "news_ai")
             basket = PostBasket(basket_str) if basket_str in PostBasket._value2member_map_ else PostBasket.NEWS_AI
 
             if basket == PostBasket.LESSON:
@@ -213,139 +413,45 @@ class TechBotOrchestrator:
                     lesson_data = lessons_list[0]
 
                 lesson_title = lesson_data.get("title", f"مفهوم {current_lesson_id}") if lesson_data else "یادگیری عمیق"
-                concept = lesson_data.get("concept", {}) if lesson_data else {}
-                example = lesson_data.get("example", {}) if lesson_data else {}
-                practice = lesson_data.get("practice", {}) if lesson_data else {}
-
                 slot_contexts[slot_id] = {
                     "basket": basket,
                     "lesson_id": current_lesson_id,
                     "lesson_title": lesson_title,
                     "lesson_data": lesson_data,
                 }
-
-                facts_list = concept.get("allowed_facts", [])
-                facts_text = "\n".join(f"- {f}" for f in facts_list)
-                prompt_sections.append(
-                    f"--- SLOT: {slot_id} | BASKET: lesson ---\n"
-                    f"Lesson ID: {current_lesson_id} of 30\n"
-                    f"Lesson Title: {lesson_title}\n"
-                    f"Topic: {lesson_data.get('topic', '')}\n"
-                    f"Concept Summary: {concept.get('summary', '')}\n"
-                    f"Everyday Analogy: {concept.get('everyday_example', '')}\n"
-                    f"Key Facts:\n{facts_text}\n"
-                    f"Example Scenario: {example.get('scenario', '')}\n"
-                    f"Takeaway: {example.get('takeaway', '')}\n"
-                    f"Practice Exercise: {practice.get('try_now', '')}\n"
-                    f"Copyable Prompt: {practice.get('prompt_to_copy', '')}\n\n"
-                    f"STRICT INSTRUCTIONS FOR LESSON SLOT:\n"
-                    f"1. Generate 100% natural conversational developer-cafe Persian content for TechNews Bot (@tech_news_110).\n"
-                    f"2. 'hook': Eye-catching educational hook starting with 💡 or 🎓 (under 80 chars).\n"
-                    f"3. 'intro': 1-2 punchy sentences with an everyday example introducing the concept clearly.\n"
-                    f"4. 'steps': Exactly 3 dynamic, educational bullet points/steps tailored to this lesson topic.\n"
-                    f"5. 'tip': 1 golden takeaway or key lesson tip tailored specifically to {lesson_title} (under 120 chars).\n"
-                    f"6. 'try_now': 2-minute actionable practice in Persian.\n"
-                    f"7. 'prompt_to_copy': Distinct copyable prompt or snippet (do NOT duplicate try_now).\n"
-                    f"8. 'quiz': 3-option quiz (q, options, correct, explanation) on this concept.\n"
-                )
-
             elif basket == PostBasket.WEEKLY_QA:
                 slot_contexts[slot_id] = {
                     "basket": basket,
                 }
-
             else:
-                ranked = self.scorer.rank_candidates(
-                    all_candidates,
-                    basket=basket,
-                    sent_links=sent_links,
-                    recent_titles=recent_titles,
-                    limit=3,
-                )
-                if not ranked:
-                    logger.warning("No candidate passed filters for slot %s (%s).", slot_id, basket)
-                    continue
-
-                best_candidate = ranked[0]
-                enriched = await enrich_top_candidates([best_candidate], max_items=1, client=http_client)
-                best_candidate = enriched[0]
-
-                found_img = await self.image_finder.find_image(
-                    article_url=best_candidate.url,
-                    fallback_url=best_candidate.image_url,
-                    client=http_client,
-                )
-                image_url = found_img or best_candidate.image_url
-
+                candidate = top_candidates[0] if top_candidates else None
                 slot_contexts[slot_id] = {
                     "basket": basket,
-                    "candidate": best_candidate,
-                    "image_url": image_url,
-                    "source_url": best_candidate.url,
+                    "candidate": candidate,
+                    "source_url": candidate.url if candidate else None,
                 }
 
-                extracted_text = (best_candidate.full_text or best_candidate.summary or "").strip()
-                if len(extracted_text) > 3500:
-                    extracted_text = extracted_text[:3500]
-
-                prompt_sections.append(
-                    f"--- SLOT: {slot_id} | BASKET: {basket.value} ---\n"
-                    f"Title: {best_candidate.title}\n"
-                    f"Source: {best_candidate.source_name}\n"
-                    f"URL: {best_candidate.url}\n"
-                    f"Content:\n{extracted_text}\n\n"
-                    f"STRICT INSTRUCTIONS FOR NEWS/TOOL SLOT:\n"
-                    f"1. Generate 100% natural, fluent conversational developer-cafe Persian content.\n"
-                    f"2. Hook MUST be in Persian under 80 chars, starting with ⚡️, 🔥, 🚀 or 💡.\n"
-                    f"3. Intro: 1-2 punchy Persian sentences.\n"
-                    f"4. ZERO-HALLUCINATION: The 3 points MUST reflect real specific facts or numbers from the source text.\n"
-                    f"5. 'what_can_you_do': Real practical takeaway in Persian.\n"
-                    f"6. 'analysis': 1 insightful Persian sentence.\n"
-                    f"7. 'try_now': 2-minute actionable practice in Persian.\n"
-                )
-
-        # 🤖 [۲/۵] در حال دریافت محتوا از هوش مصنوعی Gemini...
-        safe_print("🤖 [۲/۵] در حال دریافت محتوا از هوش مصنوعی Gemini...")
-        llm_posts: dict[str, PostItemSchema] = {}
-
-        if prompt_sections and self.llm.api_key and not os.environ.get("PYTEST_CURRENT_TEST"):
-            combined_prompt = (
+        # Call Gemini if API key is configured and not in test
+        if self.llm.api_key and candidate_payloads and not os.environ.get("PYTEST_CURRENT_TEST"):
+            prompt = (
                 "You are writing Persian posts for TechNews Bot (@tech_news_110).\n"
-                "Generate all posts for the scheduled slots below in a single structured JSON response to save quota.\n\n"
-                + "\n\n".join(prompt_sections)
-                + "\n\nSTRICT JSON OUTPUT FORMAT:\n"
-                "Output MUST strictly be a single valid JSON object matching the GeminiBatchOutput schema:\n"
-                '{"posts": [\n'
-                '  {\n'
-                '    "slot": "...",\n'
-                '    "basket": "...",\n'
-                '    "hook": "...",\n'
-                '    "intro": "...",\n'
-                '    "points": ["...", "...", "..."],\n'
-                '    "what_can_you_do": "...",\n'
-                '    "steps": ["...", "...", "..."],\n'
-                '    "tip": "...",\n'
-                '    "try_now": "...",\n'
-                '    "prompt_to_copy": "...",\n'
-                '    "terms": ["..."],\n'
-                '    "quiz": {"q": "...", "options": ["...", "...", "..."], "correct": 0, "explanation": "..."}\n'
-                '  }\n'
-                ']}\n'
+                "Return a single JSON object matching GeminiBatchOutput schema:\n"
+                f"Slots: {[s.get('slot_id') for s in slots_to_process]}\n"
+                f"Candidates (Top 10):\n{json.dumps(candidate_payloads, ensure_ascii=False)}\n\n"
+                "Output strictly valid JSON with key 'posts'."
             )
             try:
-                batch_res = self.llm.generate_batch(combined_prompt)
+                batch_res = self.llm.generate_batch(prompt)
                 for p in batch_res.posts:
                     llm_posts[p.slot] = p
-                safe_print(f"   ✨ محتوا برای {len(batch_res.posts)} اسلات با موفقیت از هوش مصنوعی Gemini دریافت شد.")
-            except Exception as llm_err:
-                safe_print(f"❌ خطا در اتصال به هوش مصنوعی: {llm_err}")
-                logger.error("Gemini batch API call failed: %s", llm_err)
-        elif not self.llm.api_key:
-            safe_print("❌ خطا در اتصال به هوش مصنوعی: کلید دسترسی GEMINI_API_KEY تنظیم نشده است.")
+            except Exception as exc:
+                safe_print(f"❌ [۳/۵] خطا در تحلیل و تولید متن با هوش مصنوعی: {exc}")
+                logger.error("Stage 3 Gemini batch call failed: %s", exc)
+                if not dry_run:
+                    sys.exit(1)
 
-        # 🎨 [۳/۵] در حال بارگذاری فونت و ساخت تصویر گرافیکی...
-        safe_print("🎨 [۳/۵] در حال بارگذاری فونت و ساخت تصویر گرافیکی...")
-        posts_to_deliver: list[tuple[dict[str, Any], PostItemSchema, Optional[bytes], Optional[str], Optional[str]]] = []
+        # Resolve posts for slots (using candidate #1 fallback if needed)
+        posts_ready: list[tuple[dict[str, Any], PostItemSchema, Optional[str]]] = []
 
         for slot in slots_to_process:
             slot_id = slot.get("slot_id", f"{run_index}_1")
@@ -355,46 +461,14 @@ class TechBotOrchestrator:
 
             basket = ctx["basket"]
             post_item: Optional[PostItemSchema] = llm_posts.get(slot_id)
-            card_bytes: Optional[bytes] = None
-            image_url: Optional[str] = ctx.get("image_url")
-            source_url: Optional[str] = ctx.get("source_url")
 
-            # 4a. Lesson Slot
             if basket == PostBasket.LESSON:
-                current_lesson_id = ctx["lesson_id"]
-                lesson_title = ctx["lesson_title"]
-                lesson_data = ctx["lesson_data"]
-
-                font_loaded = self.card_generator.font_path or "مسیر پیش‌فرض سیستم"
-                safe_print(f"   🔤 مسیر فونت لود شده: {font_loaded}")
-
-                try:
-                    card_bytes = self.card_generator.generate_card(
-                        lesson_number=current_lesson_id,
-                        lesson_title=lesson_title,
-                        total_lessons=30,
-                    )
-                    is_valid, max_dev = validate_rendered_image(card_bytes)
-                    if is_valid:
-                        safe_print(f"   ✅ اعتبارسنجی تصویر کارت درس موفقیت‌آمیز بود (انحراف معیار: {max_dev:.2f} >= 2.0)")
-                        try:
-                            preview_card_path = self.root_dir / "data" / f"lesson_{current_lesson_id}_card.png"
-                            preview_card_path.parent.mkdir(parents=True, exist_ok=True)
-                            preview_card_path.write_bytes(card_bytes)
-                        except Exception:
-                            pass
-                    else:
-                        safe_print(f"   ❌ خطا در اعتبارسنجی تصویر: تصویر کارت تک‌رنگ یا خالی است (stddev={max_dev:.2f} < 2.0)")
-                        card_bytes = None
-                except Exception as card_err:
-                    safe_print(f"   ❌ خطا در ساخت تصویر کارت درس: {card_err}")
-                    card_bytes = None
-
-                # If LLM didn't produce post, build dynamic post from curriculum.json (zero hardcoded strings)
                 if post_item is None:
-                    concept = lesson_data.get("concept", {}) if lesson_data else {}
-                    example = lesson_data.get("example", {}) if lesson_data else {}
-                    practice = lesson_data.get("practice", {}) if lesson_data else {}
+                    lesson_data = ctx.get("lesson_data", {})
+                    lesson_title = ctx.get("lesson_title", "آموزش هوش مصنوعی")
+                    concept = lesson_data.get("concept", {})
+                    example = lesson_data.get("example", {})
+                    practice = lesson_data.get("practice", {})
                     quiz_data = practice.get("quiz", {})
 
                     allowed_facts = concept.get("allowed_facts", [])
@@ -403,22 +477,15 @@ class TechBotOrchestrator:
                         example.get("scenario", ""),
                         example.get("takeaway", ""),
                     ]
-                    dyn_tip = example.get("takeaway") or (allowed_facts[0] if allowed_facts else "")
-                    dyn_intro = concept.get("everyday_example") or concept.get("summary", "مفهوم کاربردی هوش مصنوعی")
-                    practice_try = practice.get("try_now", "").strip()
-                    practice_prompt = practice.get("prompt_to_copy", "").strip()
-                    if practice_prompt == practice_try:
-                        practice_prompt = ""
-
                     post_item = PostItemSchema(
                         slot=slot_id,
                         basket=PostBasket.LESSON,
                         hook=f"💡 {lesson_title}",
-                        intro=dyn_intro,
+                        intro=concept.get("everyday_example") or concept.get("summary", "مفهوم کاربردی هوش مصنوعی"),
                         steps=[s for s in dyn_steps if s],
-                        tip=dyn_tip,
-                        prompt_to_copy=practice_prompt,
-                        try_now=practice_try,
+                        tip=example.get("takeaway") or (allowed_facts[0] if allowed_facts else ""),
+                        try_now=practice.get("try_now", "").strip(),
+                        prompt_to_copy=practice.get("prompt_to_copy", "").strip(),
                         quiz={
                             "q": quiz_data.get("question", "صورت سوال"),
                             "options": [str(opt)[:80] for opt in quiz_data.get("options", ["گزینه ۱", "گزینه ۲", "گزینه ۳"])],
@@ -427,65 +494,55 @@ class TechBotOrchestrator:
                         } if quiz_data else None,
                     )
 
-            # 4b. Weekly Q&A Slot
             elif basket == PostBasket.WEEKLY_QA:
-                week_no = raw_state.get("completed_weeks", 1)
-                post_item = self.weekly_builder.build_weekly_post(week_number=week_no)
-
-            # 4c. News / Tool Slots
-            else:
-                best_candidate = ctx["candidate"]
-                if image_url:
-                    safe_print(f"   🖼 تصویر شاخص برای اسلات {slot_id}: {image_url}")
-
                 if post_item is None:
-                    persian_hook = (
-                        "⚡️ تحول و دستاورد تازه در دنیای هوش مصنوعی"
-                        if basket in (PostBasket.NEWS_AI, PostBasket.NEWS_TECH)
-                        else "🛠 معرفی ابزار کاربردی و هوشمند برای برنامه‌نویسان"
-                    )
-                    persian_intro = (
-                        f"گزارش‌های جدید از سوی {best_candidate.source_name} نشان می‌دهد قابلیت‌های تازه‌ای برای توسعه‌دهندگان رونمایی شده است."
-                    )
-                    clean_terms = [t for t in (best_candidate.title.split()[:3]) if len(t) > 2 and t.isalnum()]
-                    if not clean_terms:
-                        clean_terms = ["AI", "Model", "Open Source"]
+                    week_no = raw_state.get("completed_weeks", 1)
+                    post_item = self.weekly_builder.build_weekly_post(week_number=week_no)
 
-                    post_item = PostItemSchema(
-                        slot=slot_id,
-                        basket=basket,
-                        hook=persian_hook,
-                        intro=persian_intro,
-                        points=[
-                            f"تمرکز بر بهبود عملکرد و تسهیل استفاده در پروژه‌های نرم‌افزاری",
-                            f"انتشار رسمی از طریق {best_candidate.source_name} با هدف دسترسی آسان‌تر تیم‌های فنی",
-                            f"امکان بررسی و پیاده‌سازی سریع بر پایه مستندات و دیتای تازه",
-                        ] if basket in (PostBasket.NEWS_AI, PostBasket.NEWS_TECH) else [],
-                        what_can_you_do="می‌تونی از این قابلیت جدید در پروژه‌هات برای خودکارسازی کارها استفاده کنی.",
-                        steps=[
-                            "سایت یا ریپازیتوری پروژه را باز کن",
-                            "راهنمای نصب سریع را بخوان",
-                            "دستور اول را اجرا کن",
-                        ] if basket in (PostBasket.TOOL_AI, PostBasket.TOOL_TECH) else [],
-                        tip="قبل از شروع به کار، نسخه کتابخانه‌های وابسته را به‌روزرسانی کن.",
-                        try_now="همین الان صفحه پروژه را در مرورگر باز کن و قابلیت‌هاش رو بررسی کن.",
-                        terms=clean_terms,
-                    )
+            else:
+                # News / Tool: fallback to candidate #1 if JSON parsing or generation was unavailable
+                if post_item is None and top_candidates:
+                    candidate = ctx.get("candidate") or top_candidates[0]
+                    post_item = build_fallback_post(candidate, slot_id, basket)
 
             if post_item:
-                posts_to_deliver.append((slot, post_item, card_bytes, image_url, source_url))
+                posts_ready.append((slot, post_item, ctx.get("source_url")))
 
-        # 📤 [۴/۵] در حال ارسال پست به تلگرام و ایتا...
-        safe_print("📤 [۴/۵] در حال ارسال پست به تلگرام و ایتا...")
+        t_stage3_elapsed = time.monotonic() - t_stage3_start
+        safe_print(f"[۳/۵] تحلیل و تولید متن با هوش مصنوعی... (⏱ {t_stage3_elapsed:.1f}s)")
+
+        # =======================================================================
+        # [۴/۵] دریافت تصویر خبر...
+        # =======================================================================
+        t_stage4_start = time.monotonic()
+        posts_with_images: list[tuple[dict[str, Any], PostItemSchema, Optional[str], str]] = []
+
+        for slot, post_item, source_url in posts_ready:
+            slot_id = slot.get("slot_id")
+            basket = post_item.basket
+            ctx = slot_contexts.get(slot_id, {})
+
+            if basket in (PostBasket.NEWS_AI, PostBasket.NEWS_TECH, PostBasket.TOOL_AI, PostBasket.TOOL_TECH):
+                candidate = ctx.get("candidate") or (top_candidates[0] if top_candidates else None)
+                resolved_img = get_image_url(candidate)
+            else:
+                resolved_img = FALLBACK_IMAGE_URL
+
+            posts_with_images.append((slot, post_item, source_url, resolved_img))
+
+        t_stage4_elapsed = time.monotonic() - t_stage4_start
+        safe_print(f"[۴/۵] دریافت تصویر خبر... (⏱ {t_stage4_elapsed:.1f}s)")
+
+        # =======================================================================
+        # [۵/۵] انتشار پست در کانال...
+        # =======================================================================
+        t_stage5_start = time.monotonic()
         senders = [
             TelegramSender(enabled=not dry_run),
             EitaaSender(enabled=not dry_run),
         ]
 
-        if dry_run:
-            safe_print("   ℹ️ حالت شبیه‌سازی (dry-run) فعال است؛ ارسال زنده به کانال‌ها انجام نمی‌شود.")
-
-        for slot, post_item, card_bytes, image_url, source_url in posts_to_deliver:
+        for slot, post_item, source_url, image_url in posts_with_images:
             slot_id = slot.get("slot_id")
             basket = post_item.basket
 
@@ -493,41 +550,32 @@ class TechBotOrchestrator:
             rendered_tg = self.renderer.render_telegram_html(post_item, lesson_number=lesson_num)
             rendered_eitaa = self.renderer.render_eitaa_plain_text(post_item, lesson_number=lesson_num)
 
-            # Quality review
-            review_res = self.reviewer.review(post_item, rendered_text=rendered_tg)
-            logger.info("Quality review for slot %s: Score %d/100 (Passed=%s)", slot_id, review_res.score, review_res.passed)
-
-            # Fact checking
+            # Quality review and fact check
+            self.reviewer.review(post_item, rendered_text=rendered_tg)
             src_text = post_item.intro + " " + " ".join(post_item.points or [])
-            facts_ok, unverified = verify_post_item(post_item, source_text=src_text)
-            if not facts_ok:
-                logger.warning("Fact check note for slot %s: Unverified tokens: %s", slot_id, unverified)
+            verify_post_item(post_item, source_text=src_text)
 
             if dry_run:
                 safe_print(f"\n================ [DRY-RUN] Slot {slot_id} ({basket}) ================")
                 safe_print(rendered_tg)
-                card_info = f"Generated ({len(card_bytes)} bytes, saved to data/lesson_{lesson_num}_card.png)" if card_bytes else "None"
-                safe_print("--------------------------------------------------------------------")
-                safe_print(f"Stats: Length={len(rendered_tg)} chars | Card={card_info} | Image={image_url}")
+                safe_print(f"Image URL: {image_url}")
                 safe_print("====================================================================\n")
             else:
-                # Live delivery
                 for sender in senders:
                     caption = rendered_tg if sender.destination_name == "telegram" else rendered_eitaa
-                    res = await sender.send_post(
-                        text=caption,
-                        image_bytes=card_bytes,
-                        image_url=image_url,
-                        source_url=source_url,
-                        quiz=post_item.quiz.model_dump() if post_item.quiz else None,
-                    )
-                    if res.success:
-                        safe_print(f"   ✅ ارسال به {sender.destination_name} با موفقیت انجام شد (شناسه پیام: {res.message_id})")
-                    else:
-                        safe_print(f"   ❌ خطا در ارسال به {sender.destination_name}: {res.error}")
-                    logger.info("Delivered to %s: success=%s (id=%s)", sender.destination_name, res.success, res.message_id)
+                    try:
+                        res = await sender.send_post(
+                            text=caption,
+                            image_url=image_url,
+                            source_url=source_url,
+                            quiz=post_item.quiz.model_dump() if post_item.quiz else None,
+                        )
+                        if not res.success:
+                            safe_print(f"❌ [۵/۵] خطا در انتشار به {sender.destination_name}: {res.error}")
+                    except Exception as pub_exc:
+                        safe_print(f"❌ [۵/۵] خطا در انتشار به {sender.destination_name}: {pub_exc}")
 
-            # Atomic State Update
+            # Record completed state
             self.state_manager.record_completed_run(date_str, run_index, str(basket.value))
             if source_url:
                 self.state_manager.record_sent_link(source_url)
@@ -537,9 +585,9 @@ class TechBotOrchestrator:
                 with self.state_manager.transaction() as state:
                     state["current_lesson_id"] = (lesson_num % 30) + 1
 
-        await http_client.aclose()
-        logger.info("Run %d completed successfully.", run_index)
-        safe_print("✅ [۵/۵] اجرای ربات با موفقیت به پایان رسید!")
+        t_stage5_elapsed = time.monotonic() - t_stage5_start
+        safe_print(f"[۵/۵] انتشار پست در کانال... (⏱ {t_stage5_elapsed:.1f}s)")
+
         return True
 
 
