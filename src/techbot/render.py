@@ -227,11 +227,14 @@ class PostRenderer:
         if post.tip:
             blocks.append(f"📌 <b>نکته کلیدی:</b> {post.tip.strip()}")
 
-        if post.try_now:
-            blocks.append(f"🧪 <b>تمرین ۲ دقیقه‌ای:</b>\n{post.try_now.strip()}")
+        try_text = (post.try_now or "").strip()
+        if try_text:
+            blocks.append(f"🧪 <b>تمرین ۲ دقیقه‌ای:</b>\n{try_text}")
 
-        if post.prompt_to_copy:
-            blocks.append(f"📋 <code>{post.prompt_to_copy.strip()}</code>")
+        prompt_text = (post.prompt_to_copy or "").strip()
+        # Only render the 📋 section if there is a distinct copyable prompt/code snippet; otherwise, omit completely
+        if prompt_text and prompt_text != try_text:
+            blocks.append(f"📋 <code>{prompt_text}</code>")
 
         return blocks
 

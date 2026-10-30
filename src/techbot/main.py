@@ -45,7 +45,7 @@ from src.models import (
 from src.techbot.facts_check import verify_post_item
 from src.techbot.healthcheck import load_configured_sources
 from src.techbot.http import create_http_client
-from src.techbot.images import ImageFinder, LessonCardGenerator
+from src.techbot.images import ImageFinder, LessonCardGenerator, validate_rendered_image
 from src.techbot.inbox import InboxManager
 from src.techbot.llm import GeminiClient
 from src.techbot.render import PostRenderer
@@ -144,6 +144,13 @@ class TechBotOrchestrator:
         date_str = target_date or get_tehran_date()
         logger.info("Starting Run %d for date %s (dry_run=%s)", run_index, date_str, dry_run)
 
+        # 🔄 [۱/۵] شروع اجرای ربات و بررسی کلیدهای دسترسی (API Keys)...
+        safe_print("🔄 [۱/۵] شروع اجرای ربات و بررسی کلیدهای دسترسی (API Keys)...")
+        has_gemini = bool(self.llm.api_key)
+        has_telegram = bool(os.environ.get("TELEGRAM_BOT_TOKEN") and (os.environ.get("TELEGRAM_CHANNEL_ID") or os.environ.get("TELEGRAM_CHAT_ID")))
+        has_eitaa = bool((os.environ.get("EITAA_BOT_TOKEN") or os.environ.get("EITAA_API_KEY")) and os.environ.get("EITAA_CHANNEL_ID"))
+        safe_print(f"   🔑 وضعیت کلیدها: Gemini={'✅ فعال' if has_gemini else '❌ غیرفعال'} | Telegram={'✅ فعال' if has_telegram else '❌ غیرفعال'} | Eitaa={'✅ فعال' if has_eitaa else '❌ غیرفعال'}")
+
         # 1. Locate Run Configuration
         runs = self.config.get("run_plan", {}).get("runs", [])
         selected_run = next((r for r in runs if r.get("run_index") == run_index), None)
@@ -166,6 +173,7 @@ class TechBotOrchestrator:
 
         if not slots_to_process:
             logger.info("All slots for Run %d on %s are already completed. Exiting.", run_index, date_str)
+            safe_print("✅ [۵/۵] اجرای ربات با موفقیت به پایان رسید!")
             return True
 
         # 3. Fetch candidates from all sources
@@ -185,23 +193,18 @@ class TechBotOrchestrator:
 
         logger.info("Collected %d total candidate items.", len(all_candidates))
 
-        # 4. Process each slot
+        # 4. Prepare slot contexts and build single structured prompt for Gemini
         sent_links = self.state_manager.get_sent_links()
         recent_titles = self.state_manager.get_recent_titles()
 
-        posts_to_deliver: list[tuple[dict[str, Any], PostItemSchema, Optional[bytes], Optional[str], Optional[str]]] = []
+        slot_contexts: dict[str, dict[str, Any]] = {}
+        prompt_sections: list[str] = []
 
         for slot in slots_to_process:
             basket_str = slot.get("basket", "news_ai")
             slot_id = slot.get("slot_id", f"{run_index}_1")
             basket = PostBasket(basket_str) if basket_str in PostBasket._value2member_map_ else PostBasket.NEWS_AI
 
-            post_item: Optional[PostItemSchema] = None
-            card_bytes: Optional[bytes] = None
-            image_url: Optional[str] = None
-            source_url: Optional[str] = None
-
-            # 4a. Lesson Slot
             if basket == PostBasket.LESSON:
                 current_lesson_id = raw_state.get("current_lesson_id", 1)
                 lessons_list = self.curriculum.get("lessons", [])
@@ -210,49 +213,47 @@ class TechBotOrchestrator:
                     lesson_data = lessons_list[0]
 
                 lesson_title = lesson_data.get("title", f"مفهوم {current_lesson_id}") if lesson_data else "یادگیری عمیق"
-                card_bytes = self.card_generator.generate_card(
-                    lesson_number=current_lesson_id,
-                    lesson_title=lesson_title,
-                    total_lessons=30,
-                )
-                try:
-                    preview_card_path = self.root_dir / "data" / f"lesson_{current_lesson_id}_card.png"
-                    preview_card_path.parent.mkdir(parents=True, exist_ok=True)
-                    preview_card_path.write_bytes(card_bytes)
-                except Exception:
-                    pass
-
                 concept = lesson_data.get("concept", {}) if lesson_data else {}
+                example = lesson_data.get("example", {}) if lesson_data else {}
                 practice = lesson_data.get("practice", {}) if lesson_data else {}
-                quiz_data = practice.get("quiz", {})
 
-                post_item = PostItemSchema(
-                    slot=slot_id,
-                    basket=PostBasket.LESSON,
-                    hook=f"💡 {lesson_title}",
-                    intro=concept.get("everyday_example", concept.get("summary", "مفهوم کاربردی هوش مصنوعی")),
-                    steps=[
-                        concept.get("summary", "قدم اول درک مدل"),
-                        "نحوه پیاده‌سازی و ارتباط با ورودی‌ها",
-                        "بهینه‌سازی خروجی نهایی",
-                    ],
-                    tip="در پرامپت‌ها همیشه سناریوی دقیق بده تا مدل گیج نشه.",
-                    prompt_to_copy=practice.get("try_now", "یک توضیح ساده بنویس"),
-                    try_now=practice.get("try_now", "تمرین را امتحان کن"),
-                    quiz={
-                        "q": quiz_data.get("question", "صورت سوال"),
-                        "options": [str(opt)[:80] for opt in quiz_data.get("options", ["گزینه ۱", "گزینه ۲", "گزینه ۳"])],
-                        "correct": quiz_data.get("correct_index", 0),
-                        "explanation": quiz_data.get("explanation", "توضیح کوتاه"),
-                    } if quiz_data else None,
+                slot_contexts[slot_id] = {
+                    "basket": basket,
+                    "lesson_id": current_lesson_id,
+                    "lesson_title": lesson_title,
+                    "lesson_data": lesson_data,
+                }
+
+                facts_list = concept.get("allowed_facts", [])
+                facts_text = "\n".join(f"- {f}" for f in facts_list)
+                prompt_sections.append(
+                    f"--- SLOT: {slot_id} | BASKET: lesson ---\n"
+                    f"Lesson ID: {current_lesson_id} of 30\n"
+                    f"Lesson Title: {lesson_title}\n"
+                    f"Topic: {lesson_data.get('topic', '')}\n"
+                    f"Concept Summary: {concept.get('summary', '')}\n"
+                    f"Everyday Analogy: {concept.get('everyday_example', '')}\n"
+                    f"Key Facts:\n{facts_text}\n"
+                    f"Example Scenario: {example.get('scenario', '')}\n"
+                    f"Takeaway: {example.get('takeaway', '')}\n"
+                    f"Practice Exercise: {practice.get('try_now', '')}\n"
+                    f"Copyable Prompt: {practice.get('prompt_to_copy', '')}\n\n"
+                    f"STRICT INSTRUCTIONS FOR LESSON SLOT:\n"
+                    f"1. Generate 100% natural conversational developer-cafe Persian content for TechNews Bot (@tech_news_110).\n"
+                    f"2. 'hook': Eye-catching educational hook starting with 💡 or 🎓 (under 80 chars).\n"
+                    f"3. 'intro': 1-2 punchy sentences with an everyday example introducing the concept clearly.\n"
+                    f"4. 'steps': Exactly 3 dynamic, educational bullet points/steps tailored to this lesson topic.\n"
+                    f"5. 'tip': 1 golden takeaway or key lesson tip tailored specifically to {lesson_title} (under 120 chars).\n"
+                    f"6. 'try_now': 2-minute actionable practice in Persian.\n"
+                    f"7. 'prompt_to_copy': Distinct copyable prompt or snippet (do NOT duplicate try_now).\n"
+                    f"8. 'quiz': 3-option quiz (q, options, correct, explanation) on this concept.\n"
                 )
 
-            # 4b. Weekly Q&A Slot
             elif basket == PostBasket.WEEKLY_QA:
-                week_no = raw_state.get("completed_weeks", 1)
-                post_item = self.weekly_builder.build_weekly_post(week_number=week_no)
+                slot_contexts[slot_id] = {
+                    "basket": basket,
+                }
 
-            # 4c. News / Tool Slots
             else:
                 ranked = self.scorer.rank_candidates(
                     all_candidates,
@@ -261,19 +262,14 @@ class TechBotOrchestrator:
                     recent_titles=recent_titles,
                     limit=3,
                 )
-
                 if not ranked:
                     logger.warning("No candidate passed filters for slot %s (%s).", slot_id, basket)
                     continue
 
                 best_candidate = ranked[0]
-                source_url = best_candidate.url
-
-                # Enrich with full text
                 enriched = await enrich_top_candidates([best_candidate], max_items=1, client=http_client)
                 best_candidate = enriched[0]
 
-                # Find valid image
                 found_img = await self.image_finder.find_image(
                     article_url=best_candidate.url,
                     fallback_url=best_candidate.image_url,
@@ -281,43 +277,167 @@ class TechBotOrchestrator:
                 )
                 image_url = found_img or best_candidate.image_url
 
-                # Attempt LLM batch generation if key is present and not running pytest unit tests
-                if self.llm.api_key and not os.environ.get("PYTEST_CURRENT_TEST"):
-                    try:
-                        extracted_text = (best_candidate.full_text or best_candidate.summary or "").strip()
-                        if len(extracted_text) > 4000:
-                            extracted_text = extracted_text[:4000]
+                slot_contexts[slot_id] = {
+                    "basket": basket,
+                    "candidate": best_candidate,
+                    "image_url": image_url,
+                    "source_url": best_candidate.url,
+                }
 
-                        prompt = (
-                            f"You are writing a Persian post for TechNews Bot (@tech_news_110).\n"
-                            f"Slot: {slot_id} | Basket: {basket.value}\n\n"
-                            f"=== SOURCE ARTICLE CONTEXT (STRICT GROUND TRUTH) ===\n"
-                            f"Original Title: {best_candidate.title}\n"
-                            f"Source: {best_candidate.source_name}\n"
-                            f"URL: {best_candidate.url}\n"
-                            f"Content / Full-text:\n{extracted_text}\n"
-                            f"=== END SOURCE CONTEXT ===\n\n"
-                            f"STRICT RULES:\n"
-                            f"1. Generate 100% natural, fluent conversational developer-cafe Persian content.\n"
-                            f"2. Hook MUST be in Persian under 80 chars, starting with an eye-catching emoji (⚡️, 🔥, 🚀 or 💡) reflecting the exact event. NEVER output English in hook.\n"
-                            f"3. Intro MUST be 1-2 punchy Persian sentences explaining the core news.\n"
-                            f"4. ZERO-HALLUCINATION: The 3 points MUST reflect real specific facts, versions, numbers, or features from the source text above. Never output generic points.\n"
-                            f"5. 'what_can_you_do': Real, tangible practical takeaway in Persian.\n"
-                            f"6. 'analysis': 1 insightful Persian sentence.\n"
-                            f"7. 'try_now': 2-minute actionable practice in Persian.\n"
-                            f"8. Output MUST strictly be valid JSON matching the GeminiBatchOutput schema:\n"
-                            f'{{"posts": [{{"slot": "{slot_id}", "basket": "{basket.value}", "hook": "...", "intro": "...", '
-                            f'"points": ["...", "...", "..."], "what_can_you_do": "...", "analysis": "...", "try_now": "...", "terms": ["..."]}}]}}'
-                        )
-                        batch_res = self.llm.generate_batch(prompt)
-                        if batch_res.posts:
-                            post_item = batch_res.posts[0]
-                            post_item.slot = slot_id
-                            post_item.basket = basket
-                    except Exception as llm_err:
-                        logger.warning("LLM generation failed for slot %s: %s. Using synthesized fallback.", slot_id, llm_err)
+                extracted_text = (best_candidate.full_text or best_candidate.summary or "").strip()
+                if len(extracted_text) > 3500:
+                    extracted_text = extracted_text[:3500]
 
-                # Synthesize post item (developer-cafe format fallback with 100% natural Persian)
+                prompt_sections.append(
+                    f"--- SLOT: {slot_id} | BASKET: {basket.value} ---\n"
+                    f"Title: {best_candidate.title}\n"
+                    f"Source: {best_candidate.source_name}\n"
+                    f"URL: {best_candidate.url}\n"
+                    f"Content:\n{extracted_text}\n\n"
+                    f"STRICT INSTRUCTIONS FOR NEWS/TOOL SLOT:\n"
+                    f"1. Generate 100% natural, fluent conversational developer-cafe Persian content.\n"
+                    f"2. Hook MUST be in Persian under 80 chars, starting with ⚡️, 🔥, 🚀 or 💡.\n"
+                    f"3. Intro: 1-2 punchy Persian sentences.\n"
+                    f"4. ZERO-HALLUCINATION: The 3 points MUST reflect real specific facts or numbers from the source text.\n"
+                    f"5. 'what_can_you_do': Real practical takeaway in Persian.\n"
+                    f"6. 'analysis': 1 insightful Persian sentence.\n"
+                    f"7. 'try_now': 2-minute actionable practice in Persian.\n"
+                )
+
+        # 🤖 [۲/۵] در حال دریافت محتوا از هوش مصنوعی Gemini...
+        safe_print("🤖 [۲/۵] در حال دریافت محتوا از هوش مصنوعی Gemini...")
+        llm_posts: dict[str, PostItemSchema] = {}
+
+        if prompt_sections and self.llm.api_key and not os.environ.get("PYTEST_CURRENT_TEST"):
+            combined_prompt = (
+                "You are writing Persian posts for TechNews Bot (@tech_news_110).\n"
+                "Generate all posts for the scheduled slots below in a single structured JSON response to save quota.\n\n"
+                + "\n\n".join(prompt_sections)
+                + "\n\nSTRICT JSON OUTPUT FORMAT:\n"
+                "Output MUST strictly be a single valid JSON object matching the GeminiBatchOutput schema:\n"
+                '{"posts": [\n'
+                '  {\n'
+                '    "slot": "...",\n'
+                '    "basket": "...",\n'
+                '    "hook": "...",\n'
+                '    "intro": "...",\n'
+                '    "points": ["...", "...", "..."],\n'
+                '    "what_can_you_do": "...",\n'
+                '    "steps": ["...", "...", "..."],\n'
+                '    "tip": "...",\n'
+                '    "try_now": "...",\n'
+                '    "prompt_to_copy": "...",\n'
+                '    "terms": ["..."],\n'
+                '    "quiz": {"q": "...", "options": ["...", "...", "..."], "correct": 0, "explanation": "..."}\n'
+                '  }\n'
+                ']}\n'
+            )
+            try:
+                batch_res = self.llm.generate_batch(combined_prompt)
+                for p in batch_res.posts:
+                    llm_posts[p.slot] = p
+                safe_print(f"   ✨ محتوا برای {len(batch_res.posts)} اسلات با موفقیت از هوش مصنوعی Gemini دریافت شد.")
+            except Exception as llm_err:
+                safe_print(f"❌ خطا در اتصال به هوش مصنوعی: {llm_err}")
+                logger.error("Gemini batch API call failed: %s", llm_err)
+        elif not self.llm.api_key:
+            safe_print("❌ خطا در اتصال به هوش مصنوعی: کلید دسترسی GEMINI_API_KEY تنظیم نشده است.")
+
+        # 🎨 [۳/۵] در حال بارگذاری فونت و ساخت تصویر گرافیکی...
+        safe_print("🎨 [۳/۵] در حال بارگذاری فونت و ساخت تصویر گرافیکی...")
+        posts_to_deliver: list[tuple[dict[str, Any], PostItemSchema, Optional[bytes], Optional[str], Optional[str]]] = []
+
+        for slot in slots_to_process:
+            slot_id = slot.get("slot_id", f"{run_index}_1")
+            ctx = slot_contexts.get(slot_id)
+            if not ctx:
+                continue
+
+            basket = ctx["basket"]
+            post_item: Optional[PostItemSchema] = llm_posts.get(slot_id)
+            card_bytes: Optional[bytes] = None
+            image_url: Optional[str] = ctx.get("image_url")
+            source_url: Optional[str] = ctx.get("source_url")
+
+            # 4a. Lesson Slot
+            if basket == PostBasket.LESSON:
+                current_lesson_id = ctx["lesson_id"]
+                lesson_title = ctx["lesson_title"]
+                lesson_data = ctx["lesson_data"]
+
+                font_loaded = self.card_generator.font_path or "مسیر پیش‌فرض سیستم"
+                safe_print(f"   🔤 مسیر فونت لود شده: {font_loaded}")
+
+                try:
+                    card_bytes = self.card_generator.generate_card(
+                        lesson_number=current_lesson_id,
+                        lesson_title=lesson_title,
+                        total_lessons=30,
+                    )
+                    is_valid, max_dev = validate_rendered_image(card_bytes)
+                    if is_valid:
+                        safe_print(f"   ✅ اعتبارسنجی تصویر کارت درس موفقیت‌آمیز بود (انحراف معیار: {max_dev:.2f} >= 2.0)")
+                        try:
+                            preview_card_path = self.root_dir / "data" / f"lesson_{current_lesson_id}_card.png"
+                            preview_card_path.parent.mkdir(parents=True, exist_ok=True)
+                            preview_card_path.write_bytes(card_bytes)
+                        except Exception:
+                            pass
+                    else:
+                        safe_print(f"   ❌ خطا در اعتبارسنجی تصویر: تصویر کارت تک‌رنگ یا خالی است (stddev={max_dev:.2f} < 2.0)")
+                        card_bytes = None
+                except Exception as card_err:
+                    safe_print(f"   ❌ خطا در ساخت تصویر کارت درس: {card_err}")
+                    card_bytes = None
+
+                # If LLM didn't produce post, build dynamic post from curriculum.json (zero hardcoded strings)
+                if post_item is None:
+                    concept = lesson_data.get("concept", {}) if lesson_data else {}
+                    example = lesson_data.get("example", {}) if lesson_data else {}
+                    practice = lesson_data.get("practice", {}) if lesson_data else {}
+                    quiz_data = practice.get("quiz", {})
+
+                    allowed_facts = concept.get("allowed_facts", [])
+                    dyn_steps = allowed_facts[:3] if len(allowed_facts) >= 3 else [
+                        concept.get("summary", ""),
+                        example.get("scenario", ""),
+                        example.get("takeaway", ""),
+                    ]
+                    dyn_tip = example.get("takeaway") or (allowed_facts[0] if allowed_facts else "")
+                    dyn_intro = concept.get("everyday_example") or concept.get("summary", "مفهوم کاربردی هوش مصنوعی")
+                    practice_try = practice.get("try_now", "").strip()
+                    practice_prompt = practice.get("prompt_to_copy", "").strip()
+                    if practice_prompt == practice_try:
+                        practice_prompt = ""
+
+                    post_item = PostItemSchema(
+                        slot=slot_id,
+                        basket=PostBasket.LESSON,
+                        hook=f"💡 {lesson_title}",
+                        intro=dyn_intro,
+                        steps=[s for s in dyn_steps if s],
+                        tip=dyn_tip,
+                        prompt_to_copy=practice_prompt,
+                        try_now=practice_try,
+                        quiz={
+                            "q": quiz_data.get("question", "صورت سوال"),
+                            "options": [str(opt)[:80] for opt in quiz_data.get("options", ["گزینه ۱", "گزینه ۲", "گزینه ۳"])],
+                            "correct": quiz_data.get("correct_index", 0),
+                            "explanation": quiz_data.get("explanation", "توضیح کوتاه"),
+                        } if quiz_data else None,
+                    )
+
+            # 4b. Weekly Q&A Slot
+            elif basket == PostBasket.WEEKLY_QA:
+                week_no = raw_state.get("completed_weeks", 1)
+                post_item = self.weekly_builder.build_weekly_post(week_number=week_no)
+
+            # 4c. News / Tool Slots
+            else:
+                best_candidate = ctx["candidate"]
+                if image_url:
+                    safe_print(f"   🖼 تصویر شاخص برای اسلات {slot_id}: {image_url}")
+
                 if post_item is None:
                     persian_hook = (
                         "⚡️ تحول و دستاورد تازه در دنیای هوش مصنوعی"
@@ -355,11 +475,15 @@ class TechBotOrchestrator:
             if post_item:
                 posts_to_deliver.append((slot, post_item, card_bytes, image_url, source_url))
 
-        # 5. Quality Review & Rendering
+        # 📤 [۴/۵] در حال ارسال پست به تلگرام و ایتا...
+        safe_print("📤 [۴/۵] در حال ارسال پست به تلگرام و ایتا...")
         senders = [
             TelegramSender(enabled=not dry_run),
             EitaaSender(enabled=not dry_run),
         ]
+
+        if dry_run:
+            safe_print("   ℹ️ حالت شبیه‌سازی (dry-run) فعال است؛ ارسال زنده به کانال‌ها انجام نمی‌شود.")
 
         for slot, post_item, card_bytes, image_url, source_url in posts_to_deliver:
             slot_id = slot.get("slot_id")
@@ -397,6 +521,10 @@ class TechBotOrchestrator:
                         source_url=source_url,
                         quiz=post_item.quiz.model_dump() if post_item.quiz else None,
                     )
+                    if res.success:
+                        safe_print(f"   ✅ ارسال به {sender.destination_name} با موفقیت انجام شد (شناسه پیام: {res.message_id})")
+                    else:
+                        safe_print(f"   ❌ خطا در ارسال به {sender.destination_name}: {res.error}")
                     logger.info("Delivered to %s: success=%s (id=%s)", sender.destination_name, res.success, res.message_id)
 
             # Atomic State Update
@@ -411,6 +539,7 @@ class TechBotOrchestrator:
 
         await http_client.aclose()
         logger.info("Run %d completed successfully.", run_index)
+        safe_print("✅ [۵/۵] اجرای ربات با موفقیت به پایان رسید!")
         return True
 
 

@@ -36,7 +36,7 @@ try:
 except ImportError:
     legacy_genai = None
 
-DEFAULT_MODELS = ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro")
+DEFAULT_MODELS = ("gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro")
 
 
 def clean_json_markdown(text: str) -> str:

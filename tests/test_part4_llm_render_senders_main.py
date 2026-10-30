@@ -22,6 +22,7 @@ from src.techbot.facts_check import (
     verify_facts,
     verify_post_item,
 )
+from src.techbot.images import LessonCardGenerator, validate_rendered_image
 from src.techbot.llm import GeminiClient, clean_json_markdown
 from src.techbot.main import TechBotOrchestrator
 from src.techbot.render import BRAND_FOOTER, PostRenderer, html_to_plain_text
@@ -371,3 +372,60 @@ async def test_orchestrator_dry_run_pipeline(tmp_path):
             target_date="2026-10-30",
         )
         assert success_idempotent is True
+
+
+def test_lesson_renderer_omits_duplicate_prompt_to_copy():
+    """Verify that 📋 is omitted if prompt_to_copy is equal to try_now or empty."""
+    renderer = PostRenderer()
+    # Case 1: Identical try_now and prompt_to_copy
+    post_dup = PostItemSchema(
+        slot="09:00_2",
+        basket=PostBasket.LESSON,
+        hook="مفهوم هوش مصنوعی چیست؟",
+        intro="یک سیستم هوشمند برای یادگیری از داده‌ها به جای اجرای خط به خط.",
+        steps=["جمع‌آوری داده", "آموزش مدل", "ارزیابی دقت"],
+        tip="همیشه کیفیت داده مهم‌تر از حجم مدل است.",
+        try_now="از مدل بخواهید تفاوت را در ۲ خط بگوید.",
+        prompt_to_copy="از مدل بخواهید تفاوت را در ۲ خط بگوید.",
+    )
+    rendered_dup = renderer.render_telegram_html(post_dup, lesson_number=1)
+    assert "🧪 <b>تمرین ۲ دقیقه‌ای:</b>" in rendered_dup
+    assert "📋" not in rendered_dup, "Duplicate 📋 line must be omitted"
+
+    # Case 2: Distinct prompt_to_copy
+    post_distinct = PostItemSchema(
+        slot="09:00_2",
+        basket=PostBasket.LESSON,
+        hook="مفهوم هوش مصنوعی چیست؟",
+        intro="یک سیستم هوشمند برای یادگیری از داده‌ها به جای اجرای خط به خط.",
+        steps=["جمع‌آوری داده", "آموزش مدل", "ارزیابی دقت"],
+        tip="همیشه کیفیت داده مهم‌تر از حجم مدل است.",
+        try_now="تمرین را در مرورگر انجام بده.",
+        prompt_to_copy="Explain the difference between AI and traditional software in 2 lines.",
+    )
+    rendered_distinct = renderer.render_telegram_html(post_distinct, lesson_number=1)
+    assert "🧪 <b>تمرین ۲ دقیقه‌ای:</b>" in rendered_distinct
+    assert "📋" in rendered_distinct, "Distinct 📋 prompt snippet must be rendered"
+
+
+def test_image_stat_stddev_validation_rejects_blank():
+    """Verify PIL.ImageStat.Stat stddev validation."""
+    from PIL import Image
+    import io
+
+    # Blank solid image (stddev == 0.0)
+    blank_im = Image.new("RGB", (1200, 675), color=(11, 15, 25))
+    buf = io.BytesIO()
+    blank_im.save(buf, format="PNG")
+    blank_bytes = buf.getvalue()
+
+    is_valid, dev = validate_rendered_image(blank_bytes)
+    assert is_valid is False
+    assert dev < 2.0
+
+    # Valid lesson card image (stddev >= 2.0)
+    gen = LessonCardGenerator()
+    valid_bytes = gen.generate_card(1, "تست اعتبارسنجی تصویر")
+    is_valid, dev = validate_rendered_image(valid_bytes)
+    assert is_valid is True
+    assert dev >= 2.0

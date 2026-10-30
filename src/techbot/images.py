@@ -33,11 +33,12 @@ logger = logging.getLogger(__name__)
 
 # Try importing Pillow
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, ImageStat
 except ImportError:
     Image = None
     ImageDraw = None
     ImageFont = None
+    ImageStat = None
 
 # Try importing arabic_reshaper and bidi
 try:
@@ -387,48 +388,58 @@ class LessonCardGenerator:
         self.font_path = self._resolve_font(font_path)
 
     def _resolve_font(self, custom_path: Optional[Path | str] = None) -> Optional[str]:
-        """Find the best available Persian/Arabic TrueType font."""
+        """Find the best available Persian/Arabic TrueType font via absolute paths."""
         if custom_path and Path(custom_path).exists():
             return str(Path(custom_path).resolve())
 
-        root = Path(__file__).resolve().parents[2]
+        # Resolve paths relative to this file to ensure reliability on Ubuntu GitHub runners
+        current_dir = Path(__file__).resolve().parent
+        techbot_pkg = current_dir.parent
+        project_root = techbot_pkg.parent
+
         candidates = [
-            root / "fonts" / "Vazirmatn-Bold.ttf",
-            root / "fonts" / "Vazirmatn-Regular.ttf",
-            root / "fonts" / "Vazirmatn.ttf",
+            project_root / "fonts" / "Vazirmatn-Bold.ttf",
+            project_root / "fonts" / "Vazirmatn-Regular.ttf",
+            project_root / "fonts" / "Vazirmatn.ttf",
+            techbot_pkg / "fonts" / "Vazirmatn-Bold.ttf",
+            current_dir / "fonts" / "Vazirmatn-Bold.ttf",
+            Path.cwd() / "fonts" / "Vazirmatn-Bold.ttf",
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
             Path("C:/Windows/Fonts/tahomabd.ttf"),
             Path("C:/Windows/Fonts/tahoma.ttf"),
             Path("C:/Windows/Fonts/arialbd.ttf"),
             Path("C:/Windows/Fonts/arial.ttf"),
             Path("C:/Windows/Fonts/segoeuib.ttf"),
             Path("C:/Windows/Fonts/segoeui.ttf"),
-            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
-            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
         ]
 
         for p in candidates:
             if p.exists():
-                return str(p.resolve())
+                resolved = str(p.resolve())
+                logger.info("Found font at absolute path: %s", resolved)
+                return resolved
 
+        logger.warning("No Persian font found at tested absolute paths.")
         return None
 
     def _load_font(self, size: int) -> Any:
-        """Load ImageFont at specific size or return robust fallback."""
-        if ImageFont is not None:
-            if self.font_path:
-                try:
-                    return ImageFont.truetype(self.font_path, size=size)
-                except Exception as exc:
-                    logger.debug("Failed loading font from path '%s': %s", self.font_path, exc)
+        """Load ImageFont at specific size without silently swallowing font errors."""
+        if ImageFont is None:
+            raise RuntimeError("PIL.ImageFont is not available. Ensure Pillow is installed.")
 
-            for fallback_name in ("tahomabd.ttf", "tahoma.ttf", "arialbd.ttf", "arial.ttf"):
-                try:
-                    return ImageFont.truetype(fallback_name, size=size)
-                except Exception:
-                    continue
+        if self.font_path and Path(self.font_path).exists():
+            return ImageFont.truetype(self.font_path, size=size)
 
-            return ImageFont.load_default()
-        return None
+        for fallback_name in ("tahomabd.ttf", "tahoma.ttf", "arialbd.ttf", "arial.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf"):
+            try:
+                return ImageFont.truetype(fallback_name, size=size)
+            except Exception:
+                continue
+
+        raise FileNotFoundError(
+            f"No suitable TrueType font found on runner system. Resolved font path was: '{self.font_path}'."
+        )
 
     def generate_card(
         self,
@@ -438,102 +449,113 @@ class LessonCardGenerator:
         channel_handle: str = "@tech_news_110",
     ) -> bytes:
         """
-        Generate a 1200x675 graphic card as PNG bytes.
+        Generate a 1200x675 graphic card as PNG bytes with strict image validation.
         """
+        if Image is None or ImageDraw is None:
+            raise RuntimeError("Pillow (PIL) is required to generate lesson cards.")
+
         width, height = 1200, 675
         badge_text = f"درس {persian_digit(lesson_number)} از {persian_digit(total_lessons)}"
 
-        # Pillow rendering path
-        if Image is not None and ImageDraw is not None:
-            # 1. Dark canvas with deep navy slate background
-            img = Image.new("RGB", (width, height), color=(11, 15, 25))
-            draw = ImageDraw.Draw(img)
+        # 1. Dark canvas with deep navy slate background
+        img = Image.new("RGB", (width, height), color=(11, 15, 25))
+        draw = ImageDraw.Draw(img)
 
-            # 2. Draw card container with rounded border
-            margin = 40
-            card_box = [margin, margin, width - margin, height - margin]
-            draw.rounded_rectangle(card_box, radius=24, fill=(15, 23, 42), outline=(30, 41, 59), width=2)
+        # 2. Draw card container with rounded border
+        margin = 40
+        card_box = [margin, margin, width - margin, height - margin]
+        draw.rounded_rectangle(card_box, radius=24, fill=(15, 23, 42), outline=(30, 41, 59), width=2)
 
-            # 3. Decorative glowing top accent bar (#38BDF8)
-            accent_bar = [margin + 20, margin + 2, width - margin - 20, margin + 8]
-            draw.rounded_rectangle(accent_bar, radius=4, fill=(56, 189, 248))
+        # 3. Decorative glowing top accent bar (#38BDF8)
+        accent_bar = [margin + 20, margin + 2, width - margin - 20, margin + 8]
+        draw.rounded_rectangle(accent_bar, radius=4, fill=(56, 189, 248))
 
-            # 4. Badge: 'درس N از ۳۰' in #38BDF8
-            badge_font = self._load_font(28)
-            badge_shaped = shape_persian_text(badge_text)
+        # 4. Badge: 'درس N از ۳۰' in #38BDF8
+        badge_font = self._load_font(28)
+        badge_shaped = shape_persian_text(badge_text)
 
-            badge_w, badge_h = 260, 56
-            badge_x = (width - badge_w) // 2
-            badge_y = margin + 50
-            draw.rounded_rectangle(
-                [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
-                radius=14,
-                fill=(22, 30, 49),
-                outline=(56, 189, 248),
-                width=2,
-            )
-            draw.text(
-                (width // 2, badge_y + badge_h // 2),
-                badge_shaped,
-                fill=(56, 189, 248),
-                font=badge_font,
-                anchor="mm",
-            )
+        badge_w, badge_h = 260, 56
+        badge_x = (width - badge_w) // 2
+        badge_y = margin + 50
+        draw.rounded_rectangle(
+            [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
+            radius=14,
+            fill=(22, 30, 49),
+            outline=(56, 189, 248),
+            width=2,
+        )
+        draw.text(
+            (width // 2, badge_y + badge_h // 2),
+            badge_shaped,
+            fill=(56, 189, 248),
+            font=badge_font,
+            anchor="mm",
+        )
 
-            # 5. Lesson Title in high-contrast #FFFFFF
-            title_font_size = 44 if len(lesson_title) > 30 else 52
-            title_font = self._load_font(title_font_size)
-            title_shaped = shape_persian_text(lesson_title)
-            title_y = height // 2 - 30
-            draw.text(
-                (width // 2, title_y),
-                title_shaped,
-                fill=(255, 255, 255),
-                font=title_font,
-                anchor="mm",
-            )
+        # 5. Lesson Title in high-contrast #FFFFFF
+        title_font_size = 44 if len(lesson_title) > 30 else 52
+        title_font = self._load_font(title_font_size)
+        title_shaped = shape_persian_text(lesson_title)
+        title_y = height // 2 - 30
+        draw.text(
+            (width // 2, title_y),
+            title_shaped,
+            fill=(255, 255, 255),
+            font=title_font,
+            anchor="mm",
+        )
 
-            # 6. Subtitle: 'دوره ۳۰ روزه تسلط بر هوش مصنوعی' in #94A3B8
-            sub_font = self._load_font(26)
-            sub_text = shape_persian_text("دوره ۳۰ روزه تسلط بر هوش مصنوعی")
-            draw.text(
-                (width // 2, title_y + 80),
-                sub_text,
-                fill=(148, 163, 184),
-                font=sub_font,
-                anchor="mm",
-            )
+        # 6. Subtitle: 'دوره ۳۰ روزه تسلط بر هوش مصنوعی' in #94A3B8
+        sub_font = self._load_font(26)
+        sub_text = shape_persian_text("دوره ۳۰ روزه تسلط بر هوش مصنوعی")
+        draw.text(
+            (width // 2, title_y + 80),
+            sub_text,
+            fill=(148, 163, 184),
+            font=sub_font,
+            anchor="mm",
+        )
 
-            # 7. Bottom Branding: Channel handle (#94A3B8) and Name (#38BDF8)
-            brand_font = self._load_font(26)
-            brand_text = shape_persian_text("تک‌نیوز")
-            footer_y = height - margin - 45
+        # 7. Bottom Branding: Channel handle (#94A3B8) and Name (#38BDF8)
+        brand_font = self._load_font(26)
+        brand_text = shape_persian_text("تک‌نیوز")
+        footer_y = height - margin - 45
 
-            draw.text((margin + 50, footer_y), channel_handle, fill=(148, 163, 184), font=brand_font, anchor="lm")
-            draw.text((width - margin - 50, footer_y), brand_text, fill=(56, 189, 248), font=brand_font, anchor="rm")
+        draw.text((margin + 50, footer_y), channel_handle, fill=(148, 163, 184), font=brand_font, anchor="lm")
+        draw.text((width - margin - 50, footer_y), brand_text, fill=(56, 189, 248), font=brand_font, anchor="rm")
 
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            return buf.getvalue()
+        # 8. Strict Image validation check using PIL.ImageStat.Stat(img).stddev
+        if ImageStat is not None:
+            stat = ImageStat.Stat(img)
+            max_dev = max(stat.stddev) if stat.stddev else 0.0
+            if max_dev < 2.0:
+                raise ValueError(
+                    f"Generated card image is nearly solid/blank (max stddev={max_dev:.2f} < 2.0). "
+                    "Font loading or text drawing failed."
+                )
 
-        # Pure-Python valid PNG image fallback (1200x675) with dark navy theme
-        signature = b"\x89PNG\r\n\x1a\n"
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
 
-        def _make_chunk(chunk_type: bytes, chunk_data: bytes) -> bytes:
-            return (
-                struct.pack(">I", len(chunk_data))
-                + chunk_type
-                + chunk_data
-                + struct.pack(">I", zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF)
-            )
 
-        ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-        # Scanlines: filter byte 0 followed by RGB pixels (#0B0F19 background)
-        row = bytearray([0]) + bytearray([11, 15, 25]) * width
-        raw_pixels = bytes(row * height)
-        idat = zlib.compress(raw_pixels, level=6)
-
-        return signature + _make_chunk(b"IHDR", ihdr) + _make_chunk(b"IDAT", idat) + _make_chunk(b"IEND", b"")
+def validate_rendered_image(image_bytes: bytes) -> tuple[bool, float]:
+    """
+    Validate that image_bytes is not nearly solid or blank using PIL.ImageStat.Stat.
+    Returns (is_valid, max_stddev).
+    """
+    if not image_bytes:
+        return False, 0.0
+    if Image is None or ImageStat is None:
+        return True, 10.0
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            stat = ImageStat.Stat(img)
+            max_dev = max(stat.stddev) if stat.stddev else 0.0
+            return (max_dev >= 2.0), max_dev
+    except Exception as exc:
+        logger.error("Failed to parse image for validation: %s", exc)
+        return False, 0.0
 
     def save_card(
         self,

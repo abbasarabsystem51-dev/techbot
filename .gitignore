@@ -67,6 +67,10 @@ logs/
 # Secrets
 secrets/
 
+# Ensure fonts are tracked
+!fonts/
+!fonts/*.ttf
+
 # Temporary files
 tmp/
 temp/
