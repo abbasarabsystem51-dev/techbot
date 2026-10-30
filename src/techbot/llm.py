@@ -175,36 +175,105 @@ class GeminiClient:
                 logger.debug("Failed to init google-genai Client: %s", exc)
 
     def discover_flash_models(self) -> list[str]:
-        """Query available models endpoint to discover working flash models."""
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={self.api_key}"
-            with httpx.Client(timeout=10.0) as client:
-                resp = client.get(url)
-                if resp.status_code == 200:
-                    models_data = resp.json().get("models", [])
-                    found_flash = []
-                    for m in models_data:
-                        name = m.get("name", "").replace("models/", "")
-                        methods = m.get("supportedGenerationMethods", [])
-                        if "generateContent" in methods and "flash" in name.lower():
-                            found_flash.append(name)
-                    if found_flash:
-                        logger.info("Discovered available flash models: %s", found_flash)
-                        return found_flash
-        except Exception as exc:
-            logger.debug("Dynamic model discovery failed: %s", exc)
+        """Query available models endpoint or SDK to discover working models."""
+        return self._fetch_and_prioritize_models()
 
-        return list(FALLBACK_FLASH_MODELS)
+    def discover_available_models(self) -> list[str]:
+        """Fetch models enabled for this API key and prioritize flash-lite, flash, and other Gemini models."""
+        return self._fetch_and_prioritize_models()
+
+    def _fetch_and_prioritize_models(self) -> list[str]:
+        """
+        Query available models to fetch models enabled for this API key
+        that support generateContent.
+        Prioritizes flash-lite models, then flash models, then other Gemini models.
+        """
+        discovered: list[str] = []
+
+        # 1. Try google-genai SDK if initialized
+        if self._client is not None and hasattr(self._client, "models") and hasattr(self._client.models, "list"):
+            try:
+                for m in self._client.models.list():
+                    name = getattr(m, "name", "") or ""
+                    clean_name = name.replace("models/", "").strip()
+                    methods = (
+                        getattr(m, "supported_generation_methods", None)
+                        or getattr(m, "supported_actions", None)
+                        or []
+                    )
+                    if not methods or "generateContent" in methods:
+                        if clean_name and "gemini" in clean_name.lower():
+                            discovered.append(clean_name)
+            except Exception as exc:
+                logger.debug("SDK client.models.list() failed: %s", exc)
+
+        # 2. Try REST endpoint
+        if not discovered and self.api_key:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models?key={self.api_key}"
+                with httpx.Client(timeout=10.0) as client:
+                    resp = client.get(url)
+                    if resp.status_code == 200:
+                        models_data = resp.json().get("models", [])
+                        for m in models_data:
+                            name = m.get("name", "").replace("models/", "").strip()
+                            methods = m.get("supportedGenerationMethods", [])
+                            if "generateContent" in methods and "gemini" in name.lower():
+                                discovered.append(name)
+            except Exception as exc:
+                logger.debug("REST model discovery failed: %s", exc)
+
+        if not discovered:
+            discovered = [self.primary_model] + [m for m in FALLBACK_FLASH_MODELS if m != self.primary_model]
+
+        def model_version_key(name: str) -> tuple[float, ...]:
+            matches = re.findall(r"(\d+(?:\.\d+)?)", name)
+            if matches:
+                try:
+                    return tuple(float(x) for x in matches)
+                except Exception:
+                    pass
+            return (0.0,)
+
+        flash_lite: list[str] = []
+        flash: list[str] = []
+        other: list[str] = []
+
+        for m in discovered:
+            m_lower = m.lower()
+            if "flash" in m_lower and ("lite" in m_lower or "8b" in m_lower):
+                flash_lite.append(m)
+            elif "flash" in m_lower:
+                flash.append(m)
+            elif "gemini" in m_lower:
+                other.append(m)
+
+        flash_lite.sort(key=model_version_key, reverse=True)
+        flash.sort(key=model_version_key, reverse=True)
+        other.sort(key=model_version_key, reverse=True)
+
+        ordered: list[str] = []
+        for m in flash_lite + flash + other:
+            if m not in ordered:
+                ordered.append(m)
+
+        safe_print(f"Discovered available models: {ordered}")
+        logger.info("Discovered available models: %s", ordered)
+        return ordered
 
     def generate_batch(self, prompt: str) -> GeminiBatchOutput:
         """
         Execute a batch request to Gemini returning a validated GeminiBatchOutput.
-        Automatically handles model fallback on 404 or 504.
+        Automatically handles dynamic model discovery and fallback on 404, 503, or 504.
         """
         if not self.api_key:
             raise ValueError("Gemini API key is missing. Set GEMINI_KEY or GEMINI_API_KEY.")
 
-        candidate_models = list(self.models)
+        if not self.custom_models:
+            candidate_models = self.discover_available_models()
+        else:
+            candidate_models = list(self.models)
+
         model_idx = 0
         discovered = False
         last_error: Optional[Exception] = None
@@ -233,6 +302,7 @@ class GeminiClient:
 
                     is_404 = "404" in err_str or "not_found" in err_str or "not found" in err_str
                     is_504 = "504" in err_str or "deadline" in err_str
+                    is_503 = "503" in err_str or "unavailable" in err_str
 
                     # If model returned 404 (unavailable/deprecated), advance immediately to next model
                     if is_404:
@@ -240,9 +310,9 @@ class GeminiClient:
                         model_unavailable = True
                         break
 
-                    # If model returned 504 on final attempt, advance to next model
-                    if is_504 and attempt == self.max_attempts:
-                        logger.warning("Model '%s' timed out (504) across all %d attempts. Triggering fallback chain...", current_model, self.max_attempts)
+                    # If model returned 504 or 503 on final attempt, advance to next model
+                    if (is_504 or is_503) and attempt == self.max_attempts:
+                        logger.warning("Model '%s' failed (%s) across all %d attempts. Triggering fallback chain...", current_model, "504" if is_504 else "503", self.max_attempts)
                         model_unavailable = True
                         break
 
@@ -261,7 +331,7 @@ class GeminiClient:
             if model_unavailable:
                 if not self.custom_models and not discovered:
                     discovered = True
-                    for dm in self.discover_flash_models():
+                    for dm in self.discover_available_models():
                         if dm not in candidate_models:
                             candidate_models.append(dm)
                 model_idx += 1
@@ -281,19 +351,26 @@ class GeminiClient:
         # 1. Try google-genai SDK if client is initialized
         if genai is not None and self._client is not None and hasattr(self._client, "models"):
             try:
-                config: dict[str, Any] = {
+                config_kwargs: dict[str, Any] = {
                     "temperature": self.temperature,
                     "response_mime_type": "application/json",
                 }
                 if genai_types is not None:
-                    config["http_options"] = genai_types.HttpOptions(timeout=int(self.timeout * 1000))
+                    config_kwargs["http_options"] = genai_types.HttpOptions(timeout=int(self.timeout * 1000))
+                    if hasattr(genai_types, "AutomaticFunctionCallingConfig"):
+                        config_kwargs["automatic_function_calling"] = genai_types.AutomaticFunctionCallingConfig(disable=True)
                 if self.system_prompt:
-                    config["system_instruction"] = self.system_prompt
+                    config_kwargs["system_instruction"] = self.system_prompt
+
+                if genai_types is not None and hasattr(genai_types, "GenerateContentConfig"):
+                    call_config = genai_types.GenerateContentConfig(**config_kwargs)
+                else:
+                    call_config = config_kwargs
 
                 response = self._client.models.generate_content(
                     model=model_name,
                     contents=prompt,
-                    config=config,
+                    config=call_config,
                 )
                 return response.text or ""
             except Exception as exc:

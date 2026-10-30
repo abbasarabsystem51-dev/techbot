@@ -42,7 +42,7 @@ from src.techbot.senders.telegram import TelegramSender
 # ===========================================================================
 
 def test_slicing_170_synthetic_items():
-    """170 synthetic items -> payload contains <= 10 candidates, summaries <= 300 chars."""
+    """170 synthetic items -> payload contains <= 8 candidates, title + summary <= 200 chars."""
     now = datetime.now(timezone.utc)
     items = []
     for i in range(170):
@@ -66,9 +66,10 @@ def test_slicing_170_synthetic_items():
     assert len(reduced) > 0
 
     payload = [format_candidate_payload(it) for it in reduced]
-    assert len(payload) <= 10
+    assert len(payload) <= 8
     for p in payload:
-        assert len(p["summary"]) <= 300
+        assert len(p["title"]) + len(p["summary"]) <= 200
+        assert len(p["summary"]) <= 200
         assert "id" in p
         assert "title" in p
         assert "source" in p
@@ -251,6 +252,96 @@ def test_llm_fallback_chain_on_404_succeeds():
         output = client.generate_batch("test prompt")
         assert len(output.posts) == 1
         assert "gemini-3.8-flash" in call_models
+        assert "gemini-3.0-flash" in call_models
+
+
+def test_llm_dynamic_model_discovery_prioritizes_flash_lite_and_flash():
+    """Dynamic model discovery prioritizes flash-lite, then flash, then other Gemini models."""
+    client = GeminiClient(api_key="real_test_key")
+    mock_models_response = {
+        "models": [
+            {"name": "models/gemini-1.5-pro", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-1.5-flash", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-2.0-flash", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-2.0-flash-lite", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-3.8-flash-lite", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/embedding-001", "supportedGenerationMethods": ["embedContent"]},
+        ]
+    }
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = mock_models_response
+
+    with patch("httpx.Client.get", return_value=mock_resp):
+        discovered = client.discover_available_models()
+
+        assert "embedding-001" not in discovered
+        # Check prioritization: flash-lite first, then flash, then others
+        assert discovered[0] == "gemini-3.8-flash-lite"
+        assert discovered[1] == "gemini-2.0-flash-lite"
+        assert discovered[2] == "gemini-3.8-flash"
+        assert discovered[3] == "gemini-2.0-flash"
+        assert discovered[4] == "gemini-1.5-flash"
+        assert discovered[5] == "gemini-1.5-pro"
+
+
+def test_llm_call_model_disables_afc_and_sets_json_mime():
+    """Verify GenerateContentConfig explicitly disables AFC and uses JSON mime type without response_schema."""
+    client = GeminiClient(api_key="mock_key")
+    client._client = MagicMock()
+    mock_gen_content = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = '{"posts": []}'
+    mock_gen_content.return_value = mock_resp
+    client._client.models.generate_content = mock_gen_content
+
+    res = client._call_model("gemini-3.8-flash", "prompt text")
+    assert res == '{"posts": []}'
+    assert mock_gen_content.called
+
+    call_args = mock_gen_content.call_args
+    config = call_args.kwargs.get("config")
+    # Verify response_mime_type is application/json
+    assert getattr(config, "response_mime_type", None) == "application/json"
+    # Verify response_schema is None (no server-side schema compilation overhead)
+    assert getattr(config, "response_schema", None) is None
+    # Verify automatic_function_calling is disabled
+    afc = getattr(config, "automatic_function_calling", None)
+    assert afc is not None
+    assert getattr(afc, "disable", None) is True
+
+
+def test_llm_fallback_chain_on_503_succeeds():
+    """If primary model returns 503 across all 3 attempts, client falls back to next model and succeeds."""
+    client = GeminiClient(api_key="fake_key", models=["gemini-3.8-flash", "gemini-3.0-flash"])
+
+    call_models = []
+
+    def mock_call(model_name, prompt):
+        call_models.append(model_name)
+        if model_name == "gemini-3.8-flash":
+            raise Exception("503 Service Unavailable: High load")
+        return json.dumps({
+            "posts": [
+                {
+                    "slot": "09:00_1",
+                    "basket": "news_ai",
+                    "hook": "⚡️ هوش مصنوعی تازه",
+                    "intro": "توضیح کوتاه خبر",
+                    "points": ["نکته ۱", "نکته ۲"],
+                    "what_can_you_do": "کاربرد",
+                    "try_now": "تست",
+                }
+            ]
+        })
+
+    with patch.object(client, "_call_model", side_effect=mock_call), \
+         patch("time.sleep"):
+        output = client.generate_batch("test prompt")
+        assert len(output.posts) == 1
+        assert call_models.count("gemini-3.8-flash") == 3
         assert "gemini-3.0-flash" in call_models
 
 

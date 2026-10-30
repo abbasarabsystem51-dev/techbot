@@ -66,7 +66,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("techbot.main")
 
-MAX_CANDIDATES = 10
+MAX_CANDIDATES = 8
 
 
 def get_tehran_date() -> str:
@@ -118,7 +118,7 @@ def reduce_candidates(
     b. Drop items older than 48h (keep undated items only if fewer than 10 would remain otherwise).
     c. Drop items already posted, if a state store exists.
     d. Score: keyword relevance + recency boost - source-diversity penalty (max 3 items per source).
-    e. Sort by score descending, slice [:MAX_CANDIDATES], with MAX_CANDIDATES = 10.
+    e. Sort by score descending, slice [:MAX_CANDIDATES], with MAX_CANDIDATES = 8.
     """
     if not items:
         return []
@@ -235,15 +235,27 @@ def reduce_candidates(
 def format_candidate_payload(item: Item) -> dict[str, str]:
     """
     Format item for LLM candidate payload:
-    {id, title, source, link, summary}; summary = HTML-stripped, truncated to 300 chars. No article bodies.
+    {id, title, source, link, summary};
+    Title + summary capped at 200 characters max, HTML stripped.
     """
+    clean_title = strip_html(item.title or "")
+    clean_title = " ".join(clean_title.split())
+    if len(clean_title) > 90:
+        clean_title = clean_title[:87] + "..."
+
     clean_summary = strip_html(item.summary or "")
     clean_summary = " ".join(clean_summary.split())
-    if len(clean_summary) > 300:
-        clean_summary = clean_summary[:297] + "..."
+
+    max_summary_len = max(0, 200 - len(clean_title))
+    if len(clean_summary) > max_summary_len:
+        if max_summary_len > 3:
+            clean_summary = clean_summary[:max_summary_len - 3] + "..."
+        else:
+            clean_summary = clean_summary[:max_summary_len]
+
     return {
         "id": item.id,
-        "title": item.title,
+        "title": clean_title,
         "source": item.source_name,
         "link": item.url,
         "summary": clean_summary,
@@ -437,7 +449,7 @@ class TechBotOrchestrator:
                 "You are writing Persian posts for TechNews Bot (@tech_news_110).\n"
                 "Return a single JSON object matching GeminiBatchOutput schema:\n"
                 f"Slots: {[s.get('slot_id') for s in slots_to_process]}\n"
-                f"Candidates (Top 10):\n{json.dumps(candidate_payloads, ensure_ascii=False)}\n\n"
+                f"Candidates (Top {len(candidate_payloads)}):\n{json.dumps(candidate_payloads, ensure_ascii=False)}\n\n"
                 "Output strictly valid JSON with key 'posts'."
             )
             try:
