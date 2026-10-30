@@ -226,20 +226,25 @@ class GeminiClient:
         if not discovered:
             discovered = [self.primary_model] + [m for m in FALLBACK_FLASH_MODELS if m != self.primary_model]
 
-        def model_version_key(name: str) -> tuple[float, ...]:
+        EXCLUDED_KEYWORDS = (
+            "tts", "image", "audio", "transcribe", "embed", "embedding",
+            "robotics", "computer-use", "live"
+        )
+        filtered_models = [m for m in discovered if not any(kw in m.lower() for kw in EXCLUDED_KEYWORDS)]
+        if not filtered_models:
+            filtered_models = list(FALLBACK_FLASH_MODELS)
+
+        def model_version_key(name: str) -> tuple[tuple[float, ...], int]:
             matches = re.findall(r"(\d+(?:\.\d+)?)", name)
-            if matches:
-                try:
-                    return tuple(float(x) for x in matches)
-                except Exception:
-                    pass
-            return (0.0,)
+            ver = tuple(float(x) for x in matches) if matches else (0.0,)
+            is_preview = 1 if ("preview" in name.lower() or "exp" in name.lower()) else 0
+            return (ver, -is_preview)
 
         flash_lite: list[str] = []
         flash: list[str] = []
         other: list[str] = []
 
-        for m in discovered:
+        for m in filtered_models:
             m_lower = m.lower()
             if "flash" in m_lower and ("lite" in m_lower or "8b" in m_lower):
                 flash_lite.append(m)
@@ -303,10 +308,17 @@ class GeminiClient:
                     is_404 = "404" in err_str or "not_found" in err_str or "not found" in err_str
                     is_504 = "504" in err_str or "deadline" in err_str
                     is_503 = "503" in err_str or "unavailable" in err_str
+                    is_model_incompatible = any(k in err_str for k in (
+                        "developer instruction is not enabled",
+                        "not enabled for this model",
+                        "not supported for this model",
+                        "model does not support",
+                        "unsupported model",
+                    ))
 
-                    # If model returned 404 (unavailable/deprecated), advance immediately to next model
-                    if is_404:
-                        logger.warning("Model '%s' returned 404 (unavailable). Triggering fallback chain...", current_model)
+                    # If model returned 404 or is incompatible, advance immediately to next model
+                    if is_404 or is_model_incompatible:
+                        logger.warning("Model '%s' is unavailable or incompatible (%s). Triggering fallback chain...", current_model, exc)
                         model_unavailable = True
                         break
 
