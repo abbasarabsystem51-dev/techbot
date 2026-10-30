@@ -2,9 +2,18 @@ name: TechNews Bot Schedule
 
 on:
   schedule:
-    # اجرا در ساعات 05:30, 08:30, 11:30, 14:30, 17:30 UTC (معادل 09:00، 12:00، 15:00، 18:00، 21:00 به وقت ایران)
+    # Runs at 05:30, 08:30, 11:30, 14:30, 17:30 UTC (09:00, 12:00, 15:00, 18:00, 21:00 Tehran)
     - cron: '30 5,8,11,14,17 * * *'
   workflow_dispatch:
+    inputs:
+      run_index:
+        description: 'Scheduled run index (1..5)'
+        required: false
+        default: '1'
+      dry_run:
+        description: 'Dry run without publishing'
+        type: boolean
+        default: false
 
 jobs:
   run-techbot:
@@ -25,21 +34,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Restore SQLite Database Cache
+      - name: Restore State Cache
         uses: actions/cache/restore@v4
         with:
           path: data
-          key: techbot-sqlite-${{ github.run_id }}
+          key: techbot-state-${{ github.run_id }}
           restore-keys: |
-            techbot-sqlite-
+            techbot-state-
 
       - name: Ensure Data Directory Exists
-        run: mkdir -p data
+        run: mkdir -p data logs
 
       - name: Run TechBot Pipeline
         env:
-          PYTHONPATH: .
+          PYTHONPATH: src:.
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -47,11 +57,11 @@ jobs:
           EITAA_API_KEY: ${{ secrets.EITAA_API_KEY }}
           EITAA_CHANNEL_ID: ${{ secrets.EITAA_CHANNEL_ID }}
         run: |
-          python -m src.main run-once
+          PYTHONPATH=src python -m techbot.main --run-index ${{ github.event.inputs.run_index || 1 }} ${{ (github.event.inputs.dry_run == 'true') && '--dry-run' || '' }}
 
-      - name: Save SQLite Database Cache
+      - name: Save State Cache
         uses: actions/cache/save@v4
         if: always()
         with:
           path: data
-          key: techbot-sqlite-${{ github.run_id }}
+          key: techbot-state-${{ github.run_id }}

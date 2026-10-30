@@ -1,0 +1,184 @@
+"""
+src/techbot/llm.py — LLM Client for Gemini API batch generation.
+
+Features:
+  1. Supports official `google-genai` SDK (`from google import genai`) with fallback to `google.generativeai`.
+  2. Reads API key from `GEMINI_KEY` or `GEMINI_API_KEY` environment variables.
+  3. Single batch call per scheduled run returning `GeminiBatchOutput`.
+  4. Model fallback list from config (e.g. gemini-2.5-flash -> gemini-1.5-pro).
+  5. Exponential backoff and retry on transient errors.
+  6. Enforces 'developer-cafe' conversational Persian tone via system prompt.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import time
+from pathlib import Path
+from typing import Any, Optional, Sequence
+
+from src.models import GeminiBatchOutput, PostItemSchema
+
+logger = logging.getLogger(__name__)
+
+# Try importing the new google-genai SDK first, then legacy google-generativeai
+try:
+    from google import genai
+    from google.genai import types as genai_types
+except ImportError:
+    genai = None
+    genai_types = None
+
+try:
+    import google.generativeai as legacy_genai
+except ImportError:
+    legacy_genai = None
+
+DEFAULT_MODELS = ("gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash")
+
+
+def clean_json_markdown(text: str) -> str:
+    """Strip markdown code fence blocks if returned by the LLM."""
+    cleaned = text.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    return cleaned.strip()
+
+
+def load_system_prompt() -> str:
+    """Load system prompt from prompts/system.md or use default developer-cafe instructions."""
+    root = Path(__file__).resolve().parents[2]
+    prompt_path = root / "prompts" / "system.md"
+    if prompt_path.exists():
+        try:
+            return prompt_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+
+    return (
+        "شما یک دولوپر رفیق، باهوش و خفن هستید که برای کانال «تِک‌نیوز» (@tech_news_110) "
+        "با لحن کافه‌ای، مدرن و پرانرژی محتوا می‌نویسید. هیچ عبارت کلیشه‌ای مانند «در دنیای امروز»، "
+        "«بی‌شک»، «انقلابی» یا «بازی را عوض کرد» استفاده نکنید."
+    )
+
+
+class GeminiClient:
+    """
+    Robust Gemini API batch generation client.
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        models: Sequence[str] = DEFAULT_MODELS,
+        temperature: float = 0.3,
+        system_prompt: Optional[str] = None,
+        timeout: float = 45.0,
+        max_retries: int = 2,
+    ) -> None:
+        self.api_key = (
+            api_key
+            or os.environ.get("GEMINI_KEY")
+            or os.environ.get("GEMINI_API_KEY")
+            or ""
+        )
+        self.models = list(models) if models else list(DEFAULT_MODELS)
+        self.temperature = temperature
+        self.system_prompt = system_prompt or load_system_prompt()
+        self.timeout = timeout
+        self.max_retries = max_retries
+
+        self._client: Any = None
+        self._init_sdk()
+
+    def _init_sdk(self) -> None:
+        """Initialize the available Google GenAI client."""
+        if not self.api_key:
+            logger.warning("No Gemini API key found in environment (GEMINI_KEY / GEMINI_API_KEY).")
+            return
+
+        if genai is not None:
+            try:
+                self._client = genai.Client(api_key=self.api_key)
+                return
+            except Exception as exc:
+                logger.debug("Failed to init google-genai Client: %s", exc)
+
+        if legacy_genai is not None:
+            try:
+                legacy_genai.configure(api_key=self.api_key)
+                self._client = legacy_genai
+            except Exception as exc:
+                logger.debug("Failed to init legacy google-generativeai: %s", exc)
+
+    def generate_batch(self, prompt: str) -> GeminiBatchOutput:
+        """
+        Execute a single batch request to Gemini returning a validated GeminiBatchOutput.
+        Automatically handles model fallback and retry on errors.
+        """
+        if not self.api_key:
+            raise ValueError("Gemini API key is missing. Set GEMINI_KEY or GEMINI_API_KEY.")
+
+        last_error: Optional[Exception] = None
+
+        for model_name in self.models:
+            for attempt in range(self.max_retries + 1):
+                try:
+                    logger.info("Calling Gemini (%s, attempt %d/%d)...", model_name, attempt + 1, self.max_retries + 1)
+                    raw_text = self._call_model(model_name, prompt)
+                    cleaned_json = clean_json_markdown(raw_text)
+
+                    # Validate output strictly with Pydantic
+                    return GeminiBatchOutput.model_validate_json(cleaned_json)
+
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning("Gemini model '%s' failed on attempt %d: %s", model_name, attempt + 1, exc)
+                    if attempt < self.max_retries:
+                        time.sleep(2.0 * (attempt + 1))
+                    else:
+                        logger.info("Falling back from model '%s' to next model...", model_name)
+                        break
+
+        raise RuntimeError(f"All Gemini models failed. Last error: {last_error}") from last_error
+
+    def _call_model(self, model_name: str, prompt: str) -> str:
+        """Direct call to model using either new or legacy SDK."""
+        # 1. New google-genai SDK
+        if genai is not None and hasattr(self._client, "models"):
+            config: dict[str, Any] = {
+                "temperature": self.temperature,
+                "response_mime_type": "application/json",
+            }
+            if self.system_prompt:
+                config["system_instruction"] = self.system_prompt
+
+            response = self._client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=config,
+            )
+            return response.text or ""
+
+        # 2. Legacy google-generativeai SDK
+        if legacy_genai is not None:
+            kwargs: dict[str, Any] = {
+                "generation_config": {
+                    "temperature": self.temperature,
+                    "response_mime_type": "application/json",
+                }
+            }
+            if self.system_prompt:
+                kwargs["system_instruction"] = self.system_prompt
+
+            model = legacy_genai.GenerativeModel(model_name, **kwargs)
+            response = model.generate_content(prompt)
+            return response.text or ""
+
+        raise RuntimeError("No Google GenAI SDK is available in the Python environment.")

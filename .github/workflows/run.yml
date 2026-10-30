@@ -1,0 +1,46 @@
+name: Manual Run TechBot
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_index:
+        description: 'Run index (1..5)'
+        required: true
+        default: '1'
+      dry_run:
+        description: 'Run in dry-run mode (no live publishing)'
+        type: boolean
+        required: true
+        default: true
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ensure Directories
+        run: mkdir -p data logs
+
+      - name: Run TechBot
+        env:
+          PYTHONPATH: src:.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EITAA_BOT_TOKEN: ${{ secrets.EITAA_API_KEY }}
+          EITAA_CHANNEL_ID: ${{ secrets.EITAA_CHANNEL_ID }}
+        run: |
+          PYTHONPATH=src python -m techbot.main --run-index ${{ github.event.inputs.run_index }} ${{ (github.event.inputs.dry_run == 'true') && '--dry-run' || '' }}

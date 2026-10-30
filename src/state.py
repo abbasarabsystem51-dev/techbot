@@ -34,6 +34,17 @@ from src.models import (
 )
 from src.utils import utcnow
 
+# Re-export atomic state file operations and idempotency helpers
+from src.techbot.state import (
+    already_processed,
+    build_idempotency_key,
+    is_run_completed,
+    mark_processed,
+    mark_run_completed,
+    read_state,
+    write_state_atomic,
+)
+
 logger = get_logger(__name__)
 
 

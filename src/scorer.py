@@ -83,8 +83,20 @@ def _authority_score(article: Article, sources: list[dict[str, Any]]) -> float:
     return clamp(weight / max_weight, 0.0, 1.0)
 
 
-# ---------------------------------------------------------------------------
-# Public API
+# Re-export Part 2 Scorer & Deduplication
+from src.techbot.scoring import (
+    Scorer,
+    calculate_title_similarity,
+    normalize_url,
+)
+
+__all__ = [
+    "score_article",
+    "rank_articles",
+    "Scorer",
+    "normalize_url",
+    "calculate_title_similarity",
+]
 # ---------------------------------------------------------------------------
 
 def score_article(article: Article, cfg: AppConfig) -> float:

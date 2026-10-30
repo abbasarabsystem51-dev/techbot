@@ -22,6 +22,17 @@ from src.config import AppConfig
 from src.logging_config import get_logger
 from src.models import Article, PostCategory
 from src.state import StateManager
+from src.techbot.sources import (
+    GitHubSearchSource,
+    HackerNewsSource,
+    HuggingFaceSource,
+    ProductHuntSource,
+    RSSSource,
+    Source,
+    enrich_top_candidates,
+    extract_fulltext,
+    extract_fulltext_from_html,
+)
 from src.utils import (
     canonical_url as make_canonical,
     content_hash as make_content_hash,

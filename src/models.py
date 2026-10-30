@@ -7,9 +7,26 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Optional, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+# Re-export structured models and enums from src.techbot.models
+from src.techbot.models import (
+    FORBIDDEN_PHRASES,
+    Post,
+    PostBasket,
+    QuizSchema,
+    PostItemSchema,
+    GeminiBatchOutput,
+    RunSlotConfig,
+    DailyRunConfig,
+    RunPlanConfig,
+    IdempotencyRecord,
+    Item,
+    validate_editorial_phrases,
+)
+
 
 
 # ---------------------------------------------------------------------------

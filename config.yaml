@@ -1,123 +1,213 @@
-# =============================================================
-# TechBot — Main Configuration
-# =============================================================
+# =============================================================================
+# TechNews Bot (@tech_news_110) — Master Configuration
+# Based on SPEC.md and editorial.md specifications
+# =============================================================================
 
-bot:
+app:
   name: "تک‌نیوز"
   handle: "@tech_news_110"
   timezone: "Asia/Tehran"
+  dry_run: true
 
+# -----------------------------------------------------------------------------
+# Run Plan: 5 Daily Runs (Total 10 posts: 7 AI + 3 Tech)
+# Times (Asia/Tehran): 09:00, 12:00, 15:00, 18:00, 21:00
+# -----------------------------------------------------------------------------
+run_plan:
+  total_daily_runs: 5
+  total_daily_posts: 10
+  ai_posts_count: 7
+  tech_posts_count: 3
+  runs:
+    - run_index: 1
+      time: "09:00"
+      label: "نوبت صبح: اخبار هوش مصنوعی و آموزش روزانه"
+      slots:
+        - slot_id: "09:00_1"
+          slot_number: 1
+          basket: "news_ai"
+          category: "ai"
+          description: "خبر برگزیده صبحگاهی دنیای AI"
+          gap_minutes: 0
+        - slot_id: "09:00_2"
+          slot_number: 2
+          basket: "lesson"
+          category: "ai"
+          description: "درس آموزشی از دوره ۳۰ روزه AI"
+          gap_minutes: 8
+
+    - run_index: 2
+      time: "12:00"
+      label: "نوبت ظهر: ابزار کاربردی و خبر هوش مصنوعی"
+      slots:
+        - slot_id: "12:00_1"
+          slot_number: 3
+          basket: "tool_ai"
+          category: "ai"
+          description: "معرفی ابزار کاربردی AI با پرامپت آماده"
+          gap_minutes: 0
+        - slot_id: "12:00_2"
+          slot_number: 4
+          basket: "news_ai"
+          category: "ai"
+          description: "خبر فوری یا تحلیلی هوش مصنوعی"
+          gap_minutes: 8
+
+    - run_index: 3
+      time: "15:00"
+      label: "نوبت بعدازظهر: اخبار و ابزارهای فناوری عمومی"
+      slots:
+        - slot_id: "15:00_1"
+          slot_number: 5
+          basket: "news_tech"
+          category: "tech"
+          description: "خبر مهم تکنولوژی روز و کاربرد آن برای مخاطب"
+          gap_minutes: 0
+        - slot_id: "15:00_2"
+          slot_number: 6
+          basket: "tool_tech"
+          category: "tech"
+          description: "ابزار یا سرویس کاربردی حوزه فناوری"
+          gap_minutes: 8
+
+    - run_index: 4
+      time: "18:00"
+      label: "نوبت عصر: درس تکمیلی و خبر هوش مصنوعی"
+      slots:
+        - slot_id: "18:00_1"
+          slot_number: 7
+          basket: "lesson"
+          category: "ai"
+          description: "بخش دوم یا تمرین درس آموزشی روزانه"
+          gap_minutes: 0
+        - slot_id: "18:00_2"
+          slot_number: 8
+          basket: "news_ai"
+          category: "ai"
+          description: "خبر و پیشرفت‌های مدل‌ها و آزمایشگاه‌های AI"
+          gap_minutes: 8
+
+    - run_index: 5
+      time: "21:00"
+      label: "نوبت شب: جمع‌بندی/پرسش و پاسخ و خبر تکنولوژی"
+      slots:
+        - slot_id: "21:00_1"
+          slot_number: 9
+          basket: "weekly_qa"
+          category: "ai"
+          description: "پرسش‌وپاسخ، چالش هفتگی یا نکته تحلیلی عمیق AI"
+          gap_minutes: 0
+        - slot_id: "21:00_2"
+          slot_number: 10
+          basket: "news_tech"
+          category: "tech"
+          description: "خبر شامگاهی دنیای سخت‌افزار یا تکنولوژی"
+          gap_minutes: 8
+
+# -----------------------------------------------------------------------------
+# Feeds & RSS Sources (SPEC.md Section 3)
+# -----------------------------------------------------------------------------
 sources:
-  - name: "TechCrunch AI"
+  - id: "techcrunch_ai"
+    name: "TechCrunch AI"
     url: "https://techcrunch.com/category/artificial-intelligence/feed/"
     category: "ai"
     weight: 1.2
     enabled: true
+    fallback_priority: 1
 
-  - name: "The Verge AI"
+  - id: "the_verge_ai"
+    name: "The Verge AI"
     url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"
     category: "ai"
     weight: 1.1
     enabled: true
+    fallback_priority: 2
 
-  - name: "Ars Technica"
+  - id: "ars_technica"
+    name: "Ars Technica"
     url: "https://feeds.arstechnica.com/arstechnica/index"
     category: "tech"
     weight: 1.0
     enabled: true
+    fallback_priority: 3
 
-  - name: "Hacker News AI"
+  - id: "hacker_news_ai"
+    name: "Hacker News AI"
     url: "https://hnrss.org/newest?q=AI+artificial+intelligence&points=50"
     category: "ai"
     weight: 0.9
     enabled: true
+    fallback_priority: 4
 
-  - name: "OpenAI Blog"
+  - id: "openai_blog"
+    name: "OpenAI Blog"
     url: "https://openai.com/blog/rss.xml"
     category: "ai"
     weight: 1.5
     enabled: true
+    fallback_priority: 1
 
-  - name: "Google AI Blog"
+  - id: "google_ai_blog"
+    name: "Google AI Blog"
     url: "https://blog.research.google/feeds/posts/default"
     category: "ai"
     weight: 1.4
     enabled: true
+    fallback_priority: 1
 
 fetching:
   timeout_seconds: 10
   max_items_per_source: 20
   freshness_hours: 48
-  user_agent: "TechBot/1.0 (+https://t.me/tech_news_110)"
+  user_agent: "TechNewsBot/1.0 (+https://t.me/tech_news_110)"
+  max_retries: 3
+  retry_delay_seconds: 2
 
-scoring:
-  ai_keywords:
-    - "artificial intelligence"
-    - "machine learning"
-    - "deep learning"
-    - "large language model"
-    - "llm"
-    - "gpt"
-    - "gemini"
-    - "claude"
-    - "neural network"
-    - "openai"
-    - "google deepmind"
-    - "generative ai"
-    - "foundation model"
-    - "transformer"
-    - "diffusion model"
-    - "reinforcement learning"
-    - "fine-tuning"
-    - "rag"
-    - "multimodal"
-  freshness_weight: 0.05
-  min_score: 0.3
-
-schedule:
-  slots:
-    - time: "09:00"
-      posts: 2
-      gap_minutes: 8
-    - time: "12:00"
-      posts: 2
-      gap_minutes: 8
-    - time: "15:00"
-      posts: 2
-      gap_minutes: 8
-    - time: "18:00"
-      posts: 2
-      gap_minutes: 8
-    - time: "21:00"
-      posts: 2
-      gap_minutes: 8
-  lesson_slot: "09:00"
-  lesson_day: "monday"
-
+# -----------------------------------------------------------------------------
+# Models (Gemini API Configuration)
+# Strictly adheres to SPEC.md: 1 daily batch request quota
+# -----------------------------------------------------------------------------
 gemini:
-  model: "gemini-3.8-flash"
-  max_requests_per_day: 10
-  batch_size: 3
+  model: "gemini-2.5-flash"
+  fallback_model: "gemini-1.5-pro"
+  max_requests_per_day: 1
   temperature: 0.4
+  top_p: 0.95
   max_output_tokens: 32768
   response_mime_type: "application/json"
+  timeout_seconds: 45
+  max_retries: 2
+  retry_delay_seconds: 5
 
-post:
-  max_chars: 1024
+# -----------------------------------------------------------------------------
+# Editorial & Post Constraints (editorial.md)
+# -----------------------------------------------------------------------------
+limits:
+  post_max_chars: 1024
+  target_body_min: 650
+  target_body_max: 800
+  network_timeout_seconds: 10
+  gemini_requests_per_day: 1
+  duplicate_check_days: 7
+
+post_formatting:
+  channel_id: "@tech_news_110"
   footer: "\n\n📡 @tech_news_110"
-  hashtags:
-    ai: "#هوش_مصنوعی #AI #تک_نیوز"
-    tech: "#فناوری #Tech #تک_نیوز"
-    lesson: "#آموزش #AI #هوش_مصنوعی #تک_نیوز"
-    tool: "#ابزار #AI_Tools #تک_نیوز"
   buttons:
     source_label: "📰 منبع"
     read_more_label: "🔗 بیشتر بخوان"
+  max_topic_tags: 2
+  max_glossary_terms: 3
 
+# -----------------------------------------------------------------------------
+# Publishing Destinations
+# -----------------------------------------------------------------------------
 destinations:
   telegram:
     enabled: true
     parse_mode: "HTML"
+    channel_id: "@tech_news_110"
     max_retries: 3
     retry_delay_seconds: 5
     inter_post_delay_seconds: 3
@@ -125,14 +215,21 @@ destinations:
   eitaa:
     enabled: true
     base_url: "https://eitaayar.ir/api"
+    channel_id: "tech_news_110"
     max_retries: 3
     retry_delay_seconds: 5
     inter_post_delay_seconds: 3
 
-database:
-  path: "data/techbot.sqlite"
-  wal_mode: true
-  busy_timeout_ms: 5000
+# -----------------------------------------------------------------------------
+# Storage & Data Paths
+# -----------------------------------------------------------------------------
+storage:
+  database_path: "data/techbot.sqlite"
+  state_file_path: "data/state.json"
+  curriculum_path: "curriculum.json"
+  glossary_path: "glossary.json"
+  hashtags_path: "hashtags.json"
+  scoring_weights_path: "scoring_weights.json"
 
 logging:
   level: "INFO"
@@ -140,7 +237,3 @@ logging:
   max_bytes: 10485760
   backup_count: 5
   console: true
-
-curriculum:
-  path: "curriculum.json"
-  loop: true
