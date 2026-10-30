@@ -295,6 +295,10 @@ class GeminiClient:
 
                     try:
                         data = json.loads(cleaned_json)
+                        if isinstance(data, list):
+                            data = {"posts": data}
+                        elif isinstance(data, dict) and "posts" not in data:
+                            data = {"posts": data}
                         return GeminiBatchOutput.model_validate(data)
                     except Exception as parse_err:
                         logger.warning("Failed to parse Gemini output as JSON (attempt %d): %s", attempt, parse_err)

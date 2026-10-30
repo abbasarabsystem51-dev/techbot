@@ -307,6 +307,21 @@ class GeminiBatchOutput(BaseModel):
         description="لیست پست‌های تولیدشده برای تمام اسلات‌های برنامه‌ریزی‌شده",
     )
 
+    @field_validator("posts", mode="before")
+    @classmethod
+    def coerce_posts_dict_to_list(cls, v: Any) -> Any:
+        if isinstance(v, dict):
+            res = []
+            for slot_id, post_data in v.items():
+                if isinstance(post_data, dict):
+                    if "slot" not in post_data:
+                        post_data["slot"] = str(slot_id)
+                    res.append(post_data)
+                else:
+                    res.append(post_data)
+            return res
+        return v
+
     def valid_posts(self) -> list[PostItemSchema]:
         """پست‌های معتبر و رد نشده را برمی‌گرداند."""
         return [p for p in self.posts if not p.skip_reason]
