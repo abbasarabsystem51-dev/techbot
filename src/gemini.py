@@ -9,7 +9,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-import google.generativeai as genai
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
 from src.config import AppConfig
 from src.logging_config import get_logger

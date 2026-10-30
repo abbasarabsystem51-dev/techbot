@@ -169,8 +169,8 @@ fetching:
 # Strictly adheres to SPEC.md: 1 daily batch request quota
 # -----------------------------------------------------------------------------
 gemini:
-  model: "gemini-2.5-flash"
-  fallback_model: "gemini-1.5-pro"
+  model: "gemini-3.8-flash"
+  fallback_model: "gemini-3.0-flash"
   max_requests_per_day: 1
   temperature: 0.4
   top_p: 0.95

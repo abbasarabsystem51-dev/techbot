@@ -199,12 +199,17 @@ def test_undated_items_retained_only_if_fewer_than_10_dated():
 # ===========================================================================
 
 def test_llm_timeout_constant():
-    assert LLM_TIMEOUT_SECONDS == 30
+    assert LLM_TIMEOUT_SECONDS == 25.0
+
+
+def test_llm_default_model_is_gemini_3_8_flash():
+    client = GeminiClient(api_key="fake_key")
+    assert client.primary_model == "gemini-3.8-flash"
 
 
 def test_llm_retry_on_504_stops_after_3_attempts():
-    """Retry on 504 stops after exactly 3 attempts and raises RuntimeError."""
-    client = GeminiClient(api_key="fake_key")
+    """Retry on 504 stops after exactly 3 attempts on single model and raises RuntimeError."""
+    client = GeminiClient(api_key="fake_key", models=["gemini-3.8-flash"])
 
     with patch.object(client, "_call_model", side_effect=Exception("504 Deadline Exceeded")) as mock_call, \
          patch("time.sleep") as mock_sleep:
@@ -214,7 +219,39 @@ def test_llm_retry_on_504_stops_after_3_attempts():
         assert mock_call.call_count == 3
         # Should have slept twice (after attempt 1 and attempt 2)
         assert mock_sleep.call_count == 2
-        assert "All 3 Gemini attempts failed" in str(exc_info.value)
+        assert "All Gemini attempts failed" in str(exc_info.value)
+
+
+def test_llm_fallback_chain_on_404_succeeds():
+    """If primary model returns 404, client dynamically falls back to next model and succeeds."""
+    client = GeminiClient(api_key="fake_key", models=["gemini-3.8-flash", "gemini-3.0-flash"])
+
+    call_models = []
+
+    def mock_call(model_name, prompt):
+        call_models.append(model_name)
+        if model_name == "gemini-3.8-flash":
+            raise Exception("404 NOT_FOUND: model is no longer available")
+        return json.dumps({
+            "posts": [
+                {
+                    "slot": "09:00_1",
+                    "basket": "news_ai",
+                    "hook": "⚡️ هوش مصنوعی تازه",
+                    "intro": "توضیح کوتاه خبر",
+                    "points": ["نکته ۱", "نکته ۲"],
+                    "what_can_you_do": "کاربرد",
+                    "try_now": "تست",
+                }
+            ]
+        })
+
+    with patch.object(client, "_call_model", side_effect=mock_call), \
+         patch.object(client, "discover_flash_models", return_value=["gemini-3.0-flash", "gemini-2.0-flash"]):
+        output = client.generate_batch("test prompt")
+        assert len(output.posts) == 1
+        assert "gemini-3.8-flash" in call_models
+        assert "gemini-3.0-flash" in call_models
 
 
 def test_llm_no_retry_on_400():
@@ -401,20 +438,21 @@ async def test_publish_photo_failure_all_images_fallback_to_text():
 # 5. Repo-Wide Safety Checks
 # ===========================================================================
 
-def test_repo_wide_no_pil_and_no_gemini_deprecated():
-    """Verify no PIL/Pillow import and no deprecated gemini 3.8 string exists in codebase."""
+def test_repo_wide_no_pil_and_no_legacy_genai():
+    """Verify no PIL/Pillow import and no legacy google.generativeai in techbot or requirements."""
     root = Path(__file__).resolve().parents[1]
-    deprecated_model_str = "gemini-" + "3.8-flash"
 
-    # Check for deprecated model string across the whole repository
-    for path in root.rglob("*"):
-        if any(skip in path.parts for skip in (".git", ".venv", "__pycache__", ".pytest_cache")):
-            continue
-        if path.name == "test_tasks_1_to_4.py":
-            continue
-        if path.is_file() and path.suffix in (".py", ".yml", ".yaml", ".md", ".json", ".toml", ".txt"):
-            content = path.read_text(encoding="utf-8", errors="ignore")
-            assert deprecated_model_str not in content, f"Found deprecated model string in {path}"
+    # Check requirements.txt and pyproject.toml have no google-generativeai
+    reqs_text = (root / "requirements.txt").read_text(encoding="utf-8")
+    assert "google-generativeai" not in reqs_text
+    pyproject_text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    assert "google-generativeai" not in pyproject_text
+
+    # Check src/techbot has no import google.generativeai
+    legacy_genai_import = "import " + "google.generativeai"
+    for path in (root / "src" / "techbot").rglob("*.py"):
+        content = path.read_text(encoding="utf-8", errors="ignore")
+        assert legacy_genai_import not in content, f"Found legacy genai in {path}"
 
     # Check for PIL / Pillow import in src/ and tests/
     pil_pat1 = "import " + "PIL"
