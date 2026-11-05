@@ -1,0 +1,112 @@
+{
+  "version": "1.0.0",
+  "description": "ضرایب و وزن‌های امتیازدهی انتخاب خبر و ارزیابی کیفیت پست طبق بخش ۴ سند SPEC.md",
+  "item_selection": {
+    "max_score": 10.0,
+    "min_pass_score": 3.0,
+    "criteria": {
+      "freshness": {
+        "weight": 3.0,
+        "max_age_hours": 48,
+        "half_life_hours": 18,
+        "description": "امتیاز تازگی خبر؛ اخبار کمتر از ۶ ساعت بالاترین امتیاز را دریافت می‌کنند"
+      },
+      "topic_relevance": {
+        "weight": 3.0,
+        "ai_boost": 1.5,
+        "description": "میزان ارتباط با موضوعات کلیدی هوش مصنوعی و فناوری مدرن"
+      },
+      "source_authority": {
+        "weight": 2.0,
+        "description": "اعتبار و موثق بودن منبع خبر اولیه",
+        "sources": {
+          "OpenAI Blog": 2.0,
+          "Google AI Blog": 2.0,
+          "TechCrunch AI": 1.8,
+          "The Verge AI": 1.6,
+          "Ars Technica": 1.5,
+          "Hacker News AI": 1.3
+        },
+        "default_source_weight": 1.0
+      },
+      "recency_uniqueness": {
+        "weight": 2.0,
+        "lookback_days": 7,
+        "penalty_for_duplicate": -10.0,
+        "description": "عدم تکرار عنوان یا موضوع در ۷ روز اخیر کانال"
+      }
+    }
+  },
+  "post_quality": {
+    "max_score": 10.0,
+    "passing_threshold": 7.0,
+    "criteria": {
+      "clarity": {
+        "weight": 3.0,
+        "description": "وضوح پیام، سادگی جملات، شروع جذاب با قلاب و استفاده از مثال ملموس"
+      },
+      "technical_accuracy": {
+        "weight": 3.0,
+        "description": "دقت فنی اصطلاحات لاتین و عدم وجود هرگونه ادعا یا توهم خارج از متن منبع"
+      },
+      "reading_value": {
+        "weight": 2.0,
+        "description": "ارزش کاربردی برای مخاطب، ارائه پرامپت یا اقدام عملی ۲ دقیقه‌ای"
+      },
+      "length_compliance": {
+        "weight": 2.0,
+        "max_characters": 1024,
+        "target_body_min": 650,
+        "target_body_max": 800,
+        "description": "طول متناسب پست و رعایت سقف ۱۰۲۴ کاراکتر پس از افزودن فوتر و هشتگ‌ها"
+      }
+    }
+  },
+  "keyword_weights": {
+    "high_priority": {
+      "multiplier": 1.5,
+      "keywords": [
+        "artificial intelligence",
+        "large language model",
+        "llm",
+        "gemini",
+        "gpt",
+        "claude",
+        "openai",
+        "deepmind",
+        "generative ai",
+        "rag",
+        "agent",
+        "transformer",
+        "fine-tuning"
+      ]
+    },
+    "medium_priority": {
+      "multiplier": 1.0,
+      "keywords": [
+        "machine learning",
+        "deep learning",
+        "neural network",
+        "diffusion model",
+        "multimodal",
+        "prompt engineering",
+        "gpu",
+        "hardware",
+        "nvidia",
+        "open source",
+        "robotics"
+      ]
+    },
+    "penalized_keywords": {
+      "multiplier": -2.0,
+      "keywords": [
+        "rumor",
+        "crypto token",
+        "memecoin",
+        "sponsored",
+        "giveaway",
+        "gossip"
+      ]
+    }
+  }
+}
