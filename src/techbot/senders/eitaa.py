@@ -40,14 +40,18 @@ class EitaaSender(BaseSender):
         self.timeout = timeout
 
     async def send_post(self, text: str, image_bytes: Optional[bytes] = None, image_url: Optional[str] = None, source_url: Optional[str] = None, quiz: Optional[dict[str, Any]] = None) -> DeliveryResult:
-        if not self.enabled: return DeliveryResult("eitaa", success=True, status="skipped")
-        if not self.bot_token: return DeliveryResult("eitaa", success=False, status="failed", error="Missing EITAA_BOT_TOKEN")
+        if not self.enabled: 
+            return DeliveryResult("eitaa", success=True, status="skipped")
+        if not self.bot_token: 
+            return DeliveryResult("eitaa", success=False, status="failed", error="Missing EITAA_BOT_TOKEN")
+        
         final_text = text
-        if source_url and source_url not in final_text: final_text = f"{final_text}
-
-🔗 منبع: {source_url}"
+        if source_url and source_url not in final_text: 
+            final_text = f"{final_text}\n\n🔗 منبع: {source_url}"
+            
         url = f"{self.base_url}/{self.bot_token}/sendMessage"
         data = {"chat_id": self.channel_id, "text": final_text}
+        
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as raw_client:
                 resp = await raw_client.post(url, data=data)
@@ -55,4 +59,5 @@ class EitaaSender(BaseSender):
                 res_json = resp.json()
                 message_id = str(res_json.get("result", {}).get("message_id", ""))
             return DeliveryResult("eitaa", success=True, message_id=message_id, status="sent")
-        except Exception as exc: return DeliveryResult("eitaa", success=False, status="failed", error=str(exc))
+        except Exception as exc: 
+            return DeliveryResult("eitaa", success=False, status="failed", error=str(exc))
