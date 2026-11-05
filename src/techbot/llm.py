@@ -1,19 +1,5 @@
 """
 src/techbot/llm.py — LLM Client for Gemini API batch generation.
-
-Features:
-  1. Uses modern `google-genai` SDK or direct, clean `httpx` REST calls to Gemini API.
-  2. Completely removes deprecated `google.generativeai` and gRPC dependencies.
-  3. Default primary model: `gemini-3.8-flash` (configurable via `GEMINI_MODEL`).
-  4. Automatic dynamic auto-discovery fallback chain:
-     If primary model returns 404 or 504, queries available models endpoint
-     (GET https://generativelanguage.googleapis.com/v1beta/models?key={api_key})
-     or iterates through ["gemini-3.8-flash", "gemini-3.0-flash", "gemini-2.0-flash"]
-     to dynamically pick the first working flash model supporting generateContent.
-  5. Explicit timeout = 25.0s per attempt.
-  6. Retry up to 3 attempts with exponential backoff on transient errors.
-  7. Never retries 400/401/403.
-  8. Safe JSON parsing with candidate #1 fallback on syntax errors.
 """
 from __future__ import annotations
 
@@ -45,7 +31,6 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 def safe_print(text: str) -> None:
-    """Print text safely with utf-8 encoding fallback."""
     try:
         print(text, flush=True)
     except Exception:
@@ -55,8 +40,6 @@ def safe_print(text: str) -> None:
         except Exception:
             pass
 
-
-# Modern google-genai SDK
 try:
     from google import genai
     from google.genai import types as genai_types
@@ -66,22 +49,14 @@ except ImportError:
 
 
 def is_retryable_llm_error(exc: Exception) -> bool:
-    """
-    Determine if an LLM error is transient and should be retried.
-    Retry ONLY on timeout, 429, 500, 502, 503, 504, and connection errors.
-    Never retry on 400/401/403.
-    """
     status_code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
     if status_code in (400, 401, 403):
         return False
 
     err_str = str(exc).lower()
-
-    # Never retry on 400, 401, 403 or permission / auth / invalid argument
     if any(k in err_str for k in ("400", "401", "403", "invalid argument", "invalid_argument", "permission_denied", "unauthenticated")):
         return False
 
-    # Retry on timeout, 429, 500, 502, 503, 504, connection errors
     if any(k in err_str for k in ("504", "deadline exceeded", "timeout", "timed out", "429", "resource_exhausted", "500", "502", "503", "unavailable", "internal")):
         return True
 
@@ -92,7 +67,6 @@ def is_retryable_llm_error(exc: Exception) -> bool:
 
 
 def clean_json_markdown(text: str) -> str:
-    """Strip markdown code fence blocks if returned by the LLM."""
     cleaned = text.strip()
     if cleaned.startswith("```json"):
         cleaned = cleaned[7:]
@@ -104,7 +78,6 @@ def clean_json_markdown(text: str) -> str:
 
 
 def parse_llm_json(text: str) -> dict:
-    """Parse LLM JSON output with progressive repair. Raises ValueError if unrecoverable."""
     import json
     import re
 
@@ -158,7 +131,6 @@ def parse_llm_json(text: str) -> dict:
 
 
 def load_system_prompt() -> str:
-    """Load system prompt from prompts/system.md or use default developer-cafe instructions."""
     root = Path(__file__).resolve().parents[2]
     prompt_path = root / "prompts" / "system.md"
     if prompt_path.exists():
@@ -176,11 +148,6 @@ def load_system_prompt() -> str:
 
 
 class GeminiClient:
-    """
-    Robust Gemini API batch generation client using google-genai or direct httpx REST calls.
-    Features 25s timeout, auto-discovery fallback chain, and 3-attempt exponential backoff.
-    """
-
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -212,9 +179,8 @@ class GeminiClient:
         self._init_sdk()
 
     def _init_sdk(self) -> None:
-        """Initialize modern Google GenAI client if installed."""
         if not self.api_key:
-            logger.warning("No Gemini API key found in environment (GEMINI_KEY / GEMINI_API_KEY).")
+            logger.warning("No Gemini API key found in environment.")
             return
 
         if genai is not None:
@@ -229,22 +195,13 @@ class GeminiClient:
                 logger.debug("Failed to init google-genai Client: %s", exc)
 
     def discover_flash_models(self) -> list[str]:
-        """Query available models endpoint or SDK to discover working models."""
         return self._fetch_and_prioritize_models()
 
     def discover_available_models(self) -> list[str]:
-        """Fetch models enabled for this API key and prioritize flash-lite, flash, and other Gemini models."""
         return self._fetch_and_prioritize_models()
 
     def _fetch_and_prioritize_models(self) -> list[str]:
-        """
-        Query available models to fetch models enabled for this API key
-        that support generateContent.
-        Prioritizes flash-lite models, then flash models, then other Gemini models.
-        """
         discovered: list[str] = []
-
-        # 1. Try google-genai SDK if initialized
         if self._client is not None and hasattr(self._client, "models") and hasattr(self._client.models, "list"):
             try:
                 for m in self._client.models.list():
@@ -261,7 +218,6 @@ class GeminiClient:
             except Exception as exc:
                 logger.debug("SDK client.models.list() failed: %s", exc)
 
-        # 2. Try REST endpoint
         if not discovered and self.api_key:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models?key={self.api_key}"
@@ -321,20 +277,13 @@ class GeminiClient:
         return ordered
 
     def generate_batch(self, prompt: str) -> GeminiBatchOutput:
-        """
-        Execute a batch request to Gemini returning a validated GeminiBatchOutput.
-        Automatically handles dynamic model discovery and fallback on 404, 503, or 504.
-        """
         if not self.api_key:
             raise ValueError("Gemini API key is missing. Set GEMINI_KEY or GEMINI_API_KEY.")
 
-        if not self.custom_models:
-            candidate_models = self.discover_available_models()
-        else:
-            candidate_models = list(self.models)
+        # FORCED TO USE OUR CUSTOM MODELS LIST
+        candidate_models = list(self.models)
 
         model_idx = 0
-        discovered = False
         last_error: Optional[Exception] = None
 
         while model_idx < len(candidate_models):
@@ -385,19 +334,16 @@ class GeminiClient:
                         "unsupported model",
                     ))
 
-                    # If 429 (Quota Exhausted), immediately move to next model — no retry
                     if is_429:
                         logger.warning("Model '%s' returned 429 (Quota Exhausted). Moving to next model immediately.", current_model)
                         model_unavailable = True
                         break
 
-                    # If model returned 404 or is incompatible, advance immediately to next model
                     if is_404 or is_model_incompatible:
                         logger.warning("Model '%s' is unavailable or incompatible (%s). Triggering fallback chain...", current_model, exc)
                         model_unavailable = True
                         break
 
-                    # If model returned 504 or 503 on final attempt, advance to next model
                     if (is_504 or is_503) and attempt == self.max_attempts:
                         logger.warning("Model '%s' failed (%s) across all %d attempts. Triggering fallback chain...", current_model, "504" if is_504 else "503", self.max_attempts)
                         model_unavailable = True
@@ -416,11 +362,6 @@ class GeminiClient:
                         time.sleep(backoff)
 
             if model_unavailable:
-                if not self.custom_models and not discovered:
-                    discovered = True
-                    for dm in self.discover_available_models():
-                        if dm not in candidate_models:
-                            candidate_models.append(dm)
                 model_idx += 1
                 if model_idx < len(candidate_models):
                     logger.info("Falling back from '%s' to '%s'...", current_model, candidate_models[model_idx])
@@ -434,8 +375,6 @@ class GeminiClient:
         raise RuntimeError(f"All Gemini attempts failed. Last error: {last_error}")
 
     def _call_model(self, model_name: str, prompt: str) -> str:
-        """Call model using modern google-genai SDK or direct httpx REST POST with timeout=25.0."""
-        # 1. Try google-genai SDK if client is initialized
         if genai is not None and self._client is not None and hasattr(self._client, "models"):
             try:
                 from src.models import GeminiBatchOutput as _Schema
@@ -463,10 +402,8 @@ class GeminiClient:
                 )
                 return response.text or ""
             except Exception as exc:
-                # If SDK fails due to model availability or HTTP error, re-raise to trigger fallback
                 raise exc
 
-        # 2. Direct httpx REST POST call (avoids gRPC and any SDK deprecations)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
         try:
             from src.models import GeminiBatchOutput as _Schema
